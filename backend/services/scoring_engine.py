@@ -111,18 +111,121 @@ DEAL_BREAKERS = [
     },
 ]
 
-# TIER 2: RISK PENALTIES
+# =============================================================================
+# TIER 2: RISK PENALTIES (R1-R10)
+# Cumulative deductions - each rule subtracts from the score
+# =============================================================================
 RISK_PENALTIES = [
-    {"rule": "de_moderate", "field": "debt_to_equity", "min": 2.0, "max": 5.0, "lt_penalty": -15, "st_penalty": -10,
-     "description": "D/E between 2.0 - 5.0"},
-    {"rule": "interest_coverage_moderate", "field": "interest_coverage", "min": 2.0, "max": 3.0, "lt_penalty": -10, "st_penalty": -5,
-     "description": "Interest coverage 2.0x - 3.0x"},
-    {"rule": "roe_weak", "field": "roe", "threshold": 10, "operator": "lt", "lt_penalty": -12, "st_penalty": -5,
-     "description": "ROE < 10% for extended period"},
-    {"rule": "promoter_pledging_moderate", "field": "promoter_pledging", "min": 30, "max": 80, "lt_penalty": -10, "st_penalty": -15,
-     "description": "Promoter pledging 30-80%"},
-    {"rule": "pe_expensive", "field": "pe_ratio", "threshold": 50, "operator": "gt", "lt_penalty": -10, "st_penalty": -5,
-     "description": "P/E > 2x typical industry average"},
+    # R1: Debt-to-Equity between 2.0 - 5.0 - Elevated leverage but not extreme
+    {
+        "code": "R1",
+        "rule": "de_moderate", 
+        "field": "debt_to_equity", 
+        "min": 2.0, 
+        "max": 5.0, 
+        "lt_penalty": -15, 
+        "st_penalty": -10,
+        "description": "R1: D/E 2.0-5.0 - Elevated leverage"
+    },
+    # R2: Interest Coverage 2.0x - 3.0x - Adequate but tight debt service
+    {
+        "code": "R2",
+        "rule": "interest_coverage_moderate", 
+        "field": "interest_coverage", 
+        "min": 2.0, 
+        "max": 3.0, 
+        "lt_penalty": -10, 
+        "st_penalty": -5,
+        "description": "R2: Interest Coverage 2.0-3.0x - Tight debt service"
+    },
+    # R3: ROE < 10% - Weak return on capital
+    {
+        "code": "R3",
+        "rule": "roe_weak", 
+        "field": "roe", 
+        "threshold": 10, 
+        "operator": "lt", 
+        "lt_penalty": -12, 
+        "st_penalty": -5,
+        "description": "R3: ROE < 10% - Weak return on capital"
+    },
+    # R4: Promoter holding decreased > 5% QoQ - Insider confidence decline
+    {
+        "code": "R4",
+        "rule": "promoter_holding_decreased", 
+        "field": "promoter_holding_change", 
+        "threshold": -5, 
+        "operator": "lt", 
+        "lt_penalty": -8, 
+        "st_penalty": -12,
+        "description": "R4: Promoter Holding Decreased >5% - Insider selling"
+    },
+    # R5: Promoter pledging 30-80% - Financial stress signals
+    {
+        "code": "R5",
+        "rule": "promoter_pledging_moderate", 
+        "field": "promoter_pledging", 
+        "min": 30, 
+        "max": 80, 
+        "lt_penalty": -10, 
+        "st_penalty": -15,
+        "description": "R5: Promoter Pledging 30-80% - Financial stress"
+    },
+    # R6: Price > 30% below 52-week high - Momentum breakdown
+    {
+        "code": "R6",
+        "rule": "price_below_52w_high", 
+        "field": "distance_from_52w_high", 
+        "threshold": -30, 
+        "operator": "lt", 
+        "lt_penalty": -5, 
+        "st_penalty": -15,
+        "description": "R6: Price >30% below 52W High - Momentum breakdown"
+    },
+    # R7: Operating margin declining 2+ years - Business quality erosion
+    {
+        "code": "R7",
+        "rule": "operating_margin_declining", 
+        "field": "operating_margin_declining_years", 
+        "threshold": 2, 
+        "operator": "gte", 
+        "lt_penalty": -10, 
+        "st_penalty": -5,
+        "description": "R7: Operating Margin Declining 2+ Years - Quality erosion"
+    },
+    # R8: P/E > 2x sector average - Valuation risk
+    {
+        "code": "R8",
+        "rule": "pe_expensive", 
+        "field": "pe_ratio", 
+        "threshold": 50, 
+        "operator": "gt", 
+        "lt_penalty": -10, 
+        "st_penalty": -5,
+        "description": "R8: P/E > 2x Sector Avg - Valuation premium risk"
+    },
+    # R9: Delivery percentage < 30% - Speculative trading
+    {
+        "code": "R9",
+        "rule": "low_delivery_percentage", 
+        "field": "delivery_percentage", 
+        "threshold": 30, 
+        "operator": "lt", 
+        "lt_penalty": -5, 
+        "st_penalty": -10,
+        "description": "R9: Delivery% < 30% - Speculative trading"
+    },
+    # R10: Contingent liabilities > 10% of net worth - Hidden obligations
+    {
+        "code": "R10",
+        "rule": "high_contingent_liabilities", 
+        "field": "contingent_liabilities_pct", 
+        "threshold": 10, 
+        "operator": "gt", 
+        "lt_penalty": -8, 
+        "st_penalty": -3,
+        "description": "R10: Contingent Liabilities >10% Net Worth - Hidden risk"
+    },
 ]
 
 # TIER 3: QUALITY BOOSTERS (Capped at +30 total)
