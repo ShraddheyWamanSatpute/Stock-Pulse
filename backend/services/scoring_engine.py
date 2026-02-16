@@ -1100,7 +1100,8 @@ def generate_analysis(stock_data: Dict) -> Dict:
         "long_term_score": round(long_term_score, 1),
         "verdict": verdict,
         "confidence_level": confidence_level,
-        "confidence_score": round(confidence_score, 2),
+        "confidence_score": round(confidence_score, 1),
+        "confidence_breakdown": confidence_data["breakdown"],
         "score_breakdown": {
             "fundamental_score": round(fundamental_score, 1),
             "valuation_score": round(valuation_score, 1),
