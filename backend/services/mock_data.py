@@ -271,7 +271,7 @@ def generate_shareholding() -> Dict:
 
 
 def generate_stock_data(stock_info: Dict) -> Dict:
-    """Generate complete stock data"""
+    """Generate complete stock data with all fields for deal-breaker checks"""
     base_prices = {
         "RELIANCE": 2450, "TCS": 3800, "HDFCBANK": 1650, "INFY": 1550,
         "ICICIBANK": 1050, "HINDUNILVR": 2350, "SBIN": 620, "BHARTIARTL": 1450,
@@ -292,6 +292,12 @@ def generate_stock_data(stock_info: Dict) -> Dict:
     price_change = current_price - prev_close
     
     fundamentals = generate_fundamentals(stock_info["sector"], stock_info["cap"])
+    technicals = generate_technicals(price_history)
+    
+    # Credit ratings (most are investment grade, few are lower)
+    credit_ratings = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-"]
+    # 95% chance of investment grade rating
+    credit_rating = random.choice(credit_ratings) if random.random() > 0.05 else random.choice(["BB", "B", "CCC", "D"])
     
     return {
         "symbol": stock_info["symbol"],
@@ -304,9 +310,19 @@ def generate_stock_data(stock_info: Dict) -> Dict:
         "price_change_percent": round((price_change / prev_close) * 100, 2),
         "fundamentals": fundamentals,
         "valuation": generate_valuation(current_price, fundamentals["eps"], stock_info["sector"]),
-        "technicals": generate_technicals(price_history),
+        "technicals": technicals,
         "shareholding": generate_shareholding(),
         "price_history": price_history[-90:],  # Last 90 days
+        # Fields for deal-breaker checks (D2, D6, D9)
+        "stock_status": "ACTIVE",  # D6: All stocks are active by default
+        "sebi_investigation": False,  # D2: No SEBI investigation by default
+        "credit_rating": credit_rating,  # D9: Credit rating
+        # Corporate actions for additional context
+        "corporate_actions": {
+            "last_dividend": round(random.uniform(0, 50), 2),
+            "ex_dividend_date": (datetime.now() - timedelta(days=random.randint(30, 180))).strftime("%Y-%m-%d"),
+            "upcoming_events": [],
+        },
     }
 
 
