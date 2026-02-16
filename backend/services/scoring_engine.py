@@ -489,16 +489,24 @@ def calculate_ml_adjustment() -> float:
 
 
 def generate_analysis(stock_data: Dict) -> Dict:
-    """Generate complete stock analysis"""
+    """Generate complete stock analysis with full D1-D10 deal-breaker evaluation"""
     fund = stock_data.get("fundamentals", {})
     val = stock_data.get("valuation", {})
     tech = stock_data.get("technicals", {})
     current_price = stock_data.get("current_price", 0)
     sector = stock_data.get("sector", "")
     
-    # Check deal-breakers first
-    deal_breakers = check_deal_breakers(stock_data)
-    has_deal_breaker = any(db["triggered"] for db in deal_breakers)
+    # Check deal-breakers for both long-term and short-term
+    lt_deal_breakers = check_deal_breakers(stock_data, is_short_term=False)
+    st_deal_breakers = check_deal_breakers(stock_data, is_short_term=True)
+    
+    # A deal-breaker is triggered if it affects the respective analysis type
+    has_lt_deal_breaker = any(db["triggered"] for db in lt_deal_breakers if not db.get("skipped"))
+    has_st_deal_breaker = any(db["triggered"] for db in st_deal_breakers)
+    
+    # Get list of triggered deal-breakers for reporting
+    triggered_lt_dbs = [db for db in lt_deal_breakers if db["triggered"]]
+    triggered_st_dbs = [db for db in st_deal_breakers if db["triggered"]]
     
     # Calculate base scores
     fundamental_score = calculate_fundamental_score(fund)
@@ -530,14 +538,17 @@ def generate_analysis(stock_data: Dict) -> Dict:
     st_ml = calculate_ml_adjustment()
     short_term_score = max(0, min(100, st_base + st_penalty + st_boost + st_ml))
     
-    # If deal-breaker triggered, cap scores
-    if has_deal_breaker:
+    # If deal-breaker triggered, cap scores at 35
+    if has_lt_deal_breaker:
         long_term_score = min(long_term_score, 35)
+    if has_st_deal_breaker:
         short_term_score = min(short_term_score, 35)
     
-    # Determine verdict
+    # Determine verdict based on deal-breakers and scores
+    has_any_deal_breaker = has_lt_deal_breaker or has_st_deal_breaker
     avg_score = (long_term_score + short_term_score) / 2
-    if has_deal_breaker:
+    
+    if has_any_deal_breaker:
         verdict = "STRONG AVOID"
     elif avg_score >= 80:
         verdict = "STRONG BUY"
