@@ -862,7 +862,6 @@ def calculate_confidence_score(stock_data: Dict, ml_confidence: float = None) ->
     optional_populated = sum(1 for f in optional_fields if is_populated(f))
     
     # Weighted completeness (critical fields matter more)
-    total_fields = len(critical_fields) + len(important_fields) + len(optional_fields)
     weighted_completeness = (
         (critical_populated / len(critical_fields)) * 0.5 +  # 50% weight to critical
         (important_populated / len(important_fields)) * 0.35 +  # 35% weight to important
