@@ -89,13 +89,6 @@ app = FastAPI(title="Stock Analysis Platform API", version="1.0.0")
 # Create router with /api prefix
 api_router = APIRouter(prefix="/api")
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
 # Log data source status
 logger.info(f"Real data available: {REAL_DATA_AVAILABLE}")
 logger.info(f"Use real data: {USE_REAL_DATA}")
