@@ -541,27 +541,80 @@ def _calculate_negative_fcf_years(fund: Dict) -> int:
     return negative_years
 
 
-def apply_risk_penalties(stock_data: Dict, is_long_term: bool) -> float:
-    """Calculate risk penalty adjustments"""
+def _calculate_operating_margin_declining_years(fund: Dict) -> int:
+    """Calculate consecutive years of declining operating margin for R7"""
+    om_history = fund.get("operating_margin_history", [])
+    if not om_history or len(om_history) < 2:
+        return 0
+    
+    declining_years = 0
+    # Check from most recent backwards
+    for i in range(len(om_history) - 1, 0, -1):
+        if om_history[i] < om_history[i-1]:
+            declining_years += 1
+        else:
+            break
+    
+    return declining_years
+
+
+def apply_risk_penalties(stock_data: Dict, is_long_term: bool) -> Tuple[float, List[Dict]]:
+    """
+    Calculate risk penalty adjustments (R1-R10).
+    Returns tuple of (total_penalty, list_of_applied_penalties)
+    """
     penalty = 0
+    applied_penalties = []
+    
     fund = stock_data.get("fundamentals", {})
     val = stock_data.get("valuation", {})
     share = stock_data.get("shareholding", {})
+    tech = stock_data.get("technicals", {})
     
-    all_data = {**fund, **val, **share}
+    # Combine all data sources
+    all_data = {
+        **fund, 
+        **val, 
+        **share,
+        **tech,
+        # Calculate derived field for R7
+        "operating_margin_declining_years": _calculate_operating_margin_declining_years(fund),
+    }
     
     for rp in RISK_PENALTIES:
         value = all_data.get(rp["field"], 0)
+        is_triggered = False
+        penalty_amount = rp["lt_penalty"] if is_long_term else rp["st_penalty"]
         
         if "min" in rp and "max" in rp:
-            if rp["min"] <= value <= rp["max"]:
-                penalty += rp["lt_penalty"] if is_long_term else rp["st_penalty"]
-        elif rp.get("operator") == "lt" and value < rp["threshold"]:
-            penalty += rp["lt_penalty"] if is_long_term else rp["st_penalty"]
-        elif rp.get("operator") == "gt" and value > rp["threshold"]:
-            penalty += rp["lt_penalty"] if is_long_term else rp["st_penalty"]
+            # Range check
+            if value is not None and rp["min"] <= value <= rp["max"]:
+                is_triggered = True
+        elif rp.get("operator") == "lt":
+            if value is not None and value < rp["threshold"]:
+                is_triggered = True
+        elif rp.get("operator") == "gt":
+            if value is not None and value > rp["threshold"]:
+                is_triggered = True
+        elif rp.get("operator") == "gte":
+            if value is not None and value >= rp["threshold"]:
+                is_triggered = True
+        elif rp.get("operator") == "lte":
+            if value is not None and value <= rp["threshold"]:
+                is_triggered = True
+        
+        if is_triggered:
+            penalty += penalty_amount
+            applied_penalties.append({
+                "code": rp.get("code", ""),
+                "rule": rp["rule"],
+                "description": rp["description"],
+                "value": value,
+                "threshold": rp.get("threshold", f"{rp.get('min')}-{rp.get('max')}"),
+                "penalty": penalty_amount,
+            })
     
-    return penalty
+    return penalty, applied_penalties
 
 
 def apply_quality_boosters(stock_data: Dict, is_long_term: bool) -> float:
