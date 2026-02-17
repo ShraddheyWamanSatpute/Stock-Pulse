@@ -29,6 +29,7 @@ const navItems = [
   { path: "/portfolio", label: "Portfolio", icon: Briefcase },
   { path: "/alerts", label: "Alerts", icon: Bell },
   { path: "/backtest", label: "Backtest", icon: LineChart },
+  { path: "/data-pipeline", label: "Data Pipeline", icon: Database },
   { path: "/news", label: "News Hub", icon: Newspaper },
   { path: "/reports", label: "Reports", icon: FileText },
 ];
