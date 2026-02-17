@@ -5,7 +5,7 @@ import json
 
 def test_investment_checklists():
     """Test investment checklists specifically"""
-    base_url = "https://smartdoc-review.preview.emergentagent.com"
+    base_url = "https://marketdata-flow.preview.emergentagent.com"
     
     test_symbols = ["TCS", "RELIANCE"]
     
