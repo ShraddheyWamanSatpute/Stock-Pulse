@@ -338,7 +338,7 @@ class DataPipelineService:
             })
             
             # Store in database
-            if self.db:
+            if self.db is not None:
                 try:
                     await self.db.pipeline_jobs.insert_one({**job.to_dict()})
                 except Exception as e:
