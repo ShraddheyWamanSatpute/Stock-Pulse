@@ -107,6 +107,13 @@ export const getPipelineMetrics = () => API.get("/pipeline/metrics");
 export const getPipelineDataSummary = () => API.get("/pipeline/data-summary");
 export const testGrowAPI = (symbol = "RELIANCE") => API.post("/pipeline/test-api", { symbol });
 export const getDefaultSymbols = () => API.get("/pipeline/default-symbols");
+export const getSymbolCategories = () => API.get("/pipeline/symbol-categories");
+export const addPipelineSymbols = (symbols) => API.post("/pipeline/symbols/add", symbols);
+export const removePipelineSymbols = (symbols) => API.post("/pipeline/symbols/remove", symbols);
+export const updateSchedulerConfig = (intervalMinutes, autoStart) => 
+  API.put("/pipeline/scheduler/config", null, { 
+    params: { interval_minutes: intervalMinutes, auto_start: autoStart } 
+  });
 
 export default API;
 
