@@ -503,24 +503,45 @@ class GrowwAPIExtractor:
         )
     
     def _transform_quote_data(self, raw_data: Dict, symbol: str) -> Dict:
-        """Transform raw quote data to standardized format"""
+        """Transform raw quote data to standardized format (Groww API response)"""
         try:
+            # Handle OHLC which may be nested
+            ohlc = raw_data.get("ohlc", {})
+            if isinstance(ohlc, str):
+                # Parse string format like "{open: 149.50,high: 150.50,low: 148.50,close: 149.50}"
+                try:
+                    import re
+                    matches = re.findall(r'(\w+):\s*([\d.]+)', ohlc)
+                    ohlc = {k: float(v) for k, v in matches}
+                except:
+                    ohlc = {}
+            
             return {
                 "symbol": symbol,
-                "last_price": raw_data.get("last_price", raw_data.get("ltp", 0)),
-                "open": raw_data.get("open", 0),
-                "high": raw_data.get("high", 0),
-                "low": raw_data.get("low", 0),
-                "close": raw_data.get("close", 0),
-                "prev_close": raw_data.get("prev_close", raw_data.get("previous_close", 0)),
+                "last_price": raw_data.get("last_price", 0),
+                "open": ohlc.get("open", raw_data.get("open", 0)),
+                "high": ohlc.get("high", raw_data.get("high", 0)),
+                "low": ohlc.get("low", raw_data.get("low", 0)),
+                "close": ohlc.get("close", raw_data.get("close", 0)),
+                "prev_close": raw_data.get("prev_close", 0),
                 "volume": raw_data.get("volume", 0),
-                "change": raw_data.get("change", 0),
-                "change_percent": raw_data.get("change_percent", raw_data.get("pct_change", 0)),
-                "bid": raw_data.get("bid", 0),
-                "ask": raw_data.get("ask", 0),
+                "day_change": raw_data.get("day_change", 0),
+                "day_change_percent": raw_data.get("day_change_perc", 0),
+                "bid_price": raw_data.get("bid_price", 0),
+                "bid_quantity": raw_data.get("bid_quantity", 0),
+                "offer_price": raw_data.get("offer_price", 0),
+                "offer_quantity": raw_data.get("offer_quantity", 0),
                 "upper_circuit": raw_data.get("upper_circuit_limit", 0),
                 "lower_circuit": raw_data.get("lower_circuit_limit", 0),
-                "oi": raw_data.get("oi", raw_data.get("open_interest", 0)),
+                "open_interest": raw_data.get("open_interest", 0),
+                "week_52_high": raw_data.get("week_52_high", 0),
+                "week_52_low": raw_data.get("week_52_low", 0),
+                "market_cap": raw_data.get("market_cap", 0),
+                "average_price": raw_data.get("average_price", 0),
+                "total_buy_quantity": raw_data.get("total_buy_quantity", 0),
+                "total_sell_quantity": raw_data.get("total_sell_quantity", 0),
+                "last_trade_quantity": raw_data.get("last_trade_quantity", 0),
+                "last_trade_time": raw_data.get("last_trade_time", 0),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "raw_response": raw_data
             }
