@@ -131,7 +131,7 @@ export default function DataPipeline() {
       setJobs(jobsRes.data?.jobs || []);
       setHistory(historyRes.data?.history || []);
       setLogs(logsRes.data?.logs || []);
-      setDefaultSymbols(symbolsRes.data?.symbols || []);
+      setSymbolCategories(symbolsRes.data);
     } catch (error) {
       console.error("Error fetching pipeline data:", error);
     } finally {
