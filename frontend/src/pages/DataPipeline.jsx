@@ -472,8 +472,8 @@ export default function DataPipeline() {
             Logs ({logs.length})
           </TabsTrigger>
           <TabsTrigger value="symbols" className="data-[state=active]:bg-[#3B82F6]">
-            <List className="w-4 h-4 mr-2" />
-            Symbols ({defaultSymbols.length})
+            <Layers className="w-4 h-4 mr-2" />
+            Symbols ({symbolCategories?.total_symbols || 0})
           </TabsTrigger>
         </TabsList>
 
