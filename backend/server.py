@@ -1545,11 +1545,24 @@ async def websocket_with_id(websocket: WebSocket, client_id: str):
 @app.on_event("startup")
 async def startup_event():
     """Start background services on app startup"""
+    global _data_pipeline_service
+    
     logger.info("Starting StockPulse API...")
     
     if WEBSOCKET_AVAILABLE:
         await price_broadcaster.start()
         logger.info("Price broadcaster started")
+    
+    # Initialize Data Pipeline Service
+    if PIPELINE_SERVICE_AVAILABLE:
+        try:
+            _data_pipeline_service = init_pipeline_service(db=db, api_key=GROW_API_KEY)
+            await _data_pipeline_service.initialize()
+            logger.info("Data pipeline service initialized with Groww API")
+        except Exception as e:
+            logger.error(f"Failed to initialize data pipeline service: {e}")
+    else:
+        logger.warning("Data pipeline service not available (GROW_API_KEY not set)")
     
     logger.info("StockPulse API ready!")
 
