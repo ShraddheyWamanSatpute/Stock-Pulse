@@ -80,6 +80,23 @@ except ImportError as e:
     EXTRACTION_PIPELINE_AVAILABLE = False
     _pipeline_orchestrator = None
 
+# Import Data Pipeline Service (Groww API)
+try:
+    from services.pipeline_service import init_pipeline_service, get_pipeline_service, DataPipelineService
+    from models.pipeline_models import (
+        RunExtractionRequest, RunExtractionResponse, StartSchedulerRequest,
+        LogsResponse, DataSummaryResponse, APITestRequest, APITestResponse,
+        PipelineStatusResponse, JobResponse
+    )
+    GROW_API_KEY = os.environ.get('GROW_API_KEY', '')
+    PIPELINE_SERVICE_AVAILABLE = bool(GROW_API_KEY)
+    _data_pipeline_service = None
+except ImportError as e:
+    logger.warning(f"Data pipeline service not available: {e}")
+    PIPELINE_SERVICE_AVAILABLE = False
+    _data_pipeline_service = None
+    GROW_API_KEY = ''
+
 # Configuration
 USE_REAL_DATA = os.environ.get('USE_REAL_DATA', 'true').lower() == 'true'
 
