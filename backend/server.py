@@ -1476,11 +1476,78 @@ async def test_grow_api(request: APITestRequest = None):
 @api_router.get("/pipeline/default-symbols")
 async def get_default_symbols():
     """Get the default list of symbols used for extraction"""
+    global _data_pipeline_service
+    
+    if _data_pipeline_service:
+        return _data_pipeline_service.get_symbol_categories()
+    
     from services.pipeline_service import DataPipelineService
     return {
         "symbols": DataPipelineService.DEFAULT_SYMBOLS,
         "count": len(DataPipelineService.DEFAULT_SYMBOLS)
     }
+
+
+@api_router.post("/pipeline/symbols/add")
+async def add_pipeline_symbols(symbols: List[str]):
+    """Add new symbols to the tracking list"""
+    global _data_pipeline_service
+    
+    if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
+        raise HTTPException(status_code=503, detail="Pipeline service not available")
+    
+    result = _data_pipeline_service.add_symbols(symbols)
+    return {
+        "message": f"Added {len(result['added'])} symbols",
+        **result
+    }
+
+
+@api_router.post("/pipeline/symbols/remove")
+async def remove_pipeline_symbols(symbols: List[str]):
+    """Remove symbols from the tracking list"""
+    global _data_pipeline_service
+    
+    if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
+        raise HTTPException(status_code=503, detail="Pipeline service not available")
+    
+    result = _data_pipeline_service.remove_symbols(symbols)
+    return {
+        "message": f"Removed {len(result['removed'])} symbols",
+        **result
+    }
+
+
+@api_router.put("/pipeline/scheduler/config")
+async def update_scheduler_config(
+    interval_minutes: Optional[int] = Query(None, ge=5, le=1440),
+    auto_start: Optional[bool] = None
+):
+    """Update scheduler configuration"""
+    global _data_pipeline_service
+    
+    if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
+        raise HTTPException(status_code=503, detail="Pipeline service not available")
+    
+    result = _data_pipeline_service.update_scheduler_config(
+        interval_minutes=interval_minutes,
+        auto_start=auto_start
+    )
+    return {
+        "message": "Scheduler configuration updated",
+        **result
+    }
+
+
+@api_router.get("/pipeline/symbol-categories")
+async def get_symbol_categories():
+    """Get symbols organized by category (NIFTY 50, NIFTY Next 50, Mid/Small caps)"""
+    global _data_pipeline_service
+    
+    if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
+        raise HTTPException(status_code=503, detail="Pipeline service not available")
+    
+    return _data_pipeline_service.get_symbol_categories()
 
 
 # Include router
