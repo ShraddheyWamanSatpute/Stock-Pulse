@@ -9,7 +9,8 @@ import {
   getPipelineMetrics,
   getPipelineHistory,
   testGrowAPI,
-  getDefaultSymbols
+  getDefaultSymbols,
+  getSymbolCategories
 } from "@/lib/api";
 import { toast } from "sonner";
 import { 
@@ -32,7 +33,8 @@ import {
   ArrowRight,
   Loader2,
   Settings,
-  AlertCircle
+  AlertCircle,
+  Layers
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
