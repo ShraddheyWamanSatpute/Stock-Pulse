@@ -1239,6 +1239,250 @@ async def get_field_definitions():
         )
 
 
+# ==================== DATA PIPELINE API (Groww Integration) ====================
+
+@api_router.get("/pipeline/status")
+async def get_pipeline_status():
+    """Get current data pipeline status and metrics"""
+    global _data_pipeline_service
+    
+    if not PIPELINE_SERVICE_AVAILABLE:
+        return {
+            "status": "unavailable",
+            "message": "Data pipeline service not configured. GROW_API_KEY not set.",
+            "is_running": False,
+            "metrics": None,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    
+    if _data_pipeline_service is None:
+        _data_pipeline_service = init_pipeline_service(db=db, api_key=GROW_API_KEY)
+        await _data_pipeline_service.initialize()
+    
+    return _data_pipeline_service.get_status()
+
+
+@api_router.post("/pipeline/run")
+async def run_pipeline_extraction(request: RunExtractionRequest = None):
+    """
+    Manually trigger a data extraction job.
+    
+    Extracts stock market data from Groww API for specified symbols.
+    If no symbols provided, uses default set of top Indian stocks.
+    """
+    global _data_pipeline_service
+    
+    if not PIPELINE_SERVICE_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Data pipeline service not configured. GROW_API_KEY not set."
+        )
+    
+    if _data_pipeline_service is None:
+        _data_pipeline_service = init_pipeline_service(db=db, api_key=GROW_API_KEY)
+        await _data_pipeline_service.initialize()
+    
+    symbols = request.symbols if request and request.symbols else None
+    extraction_type = request.extraction_type.value if request and request.extraction_type else "quotes"
+    
+    job = await _data_pipeline_service.run_extraction(
+        symbols=symbols,
+        extraction_type=extraction_type
+    )
+    
+    return {
+        "message": "Extraction job started",
+        "job": job.to_dict()
+    }
+
+
+@api_router.post("/pipeline/scheduler/start")
+async def start_pipeline_scheduler(request: StartSchedulerRequest = None):
+    """Start the automatic data extraction scheduler"""
+    global _data_pipeline_service
+    
+    if not PIPELINE_SERVICE_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Data pipeline service not configured. GROW_API_KEY not set."
+        )
+    
+    if _data_pipeline_service is None:
+        _data_pipeline_service = init_pipeline_service(db=db, api_key=GROW_API_KEY)
+        await _data_pipeline_service.initialize()
+    
+    interval = request.interval_minutes if request else 30
+    await _data_pipeline_service.start_scheduler(interval_minutes=interval)
+    
+    return {
+        "message": f"Scheduler started with {interval} minute interval",
+        "status": _data_pipeline_service.get_status()
+    }
+
+
+@api_router.post("/pipeline/scheduler/stop")
+async def stop_pipeline_scheduler():
+    """Stop the automatic data extraction scheduler"""
+    global _data_pipeline_service
+    
+    if not PIPELINE_SERVICE_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Data pipeline service not configured. GROW_API_KEY not set."
+        )
+    
+    if _data_pipeline_service is None:
+        return {"message": "Scheduler not running"}
+    
+    await _data_pipeline_service.stop_scheduler()
+    
+    return {
+        "message": "Scheduler stopped",
+        "status": _data_pipeline_service.get_status()
+    }
+
+
+@api_router.get("/pipeline/jobs")
+async def get_pipeline_jobs(limit: int = Query(default=20, le=100)):
+    """Get list of recent extraction jobs"""
+    global _data_pipeline_service
+    
+    if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
+        return {"jobs": [], "total": 0}
+    
+    jobs = _data_pipeline_service.get_jobs(limit=limit)
+    return {"jobs": jobs, "total": len(jobs)}
+
+
+@api_router.get("/pipeline/jobs/{job_id}")
+async def get_pipeline_job(job_id: str):
+    """Get details of a specific extraction job"""
+    global _data_pipeline_service
+    
+    if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job = _data_pipeline_service.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    return job
+
+
+@api_router.get("/pipeline/history")
+async def get_pipeline_history(limit: int = Query(default=50, le=100)):
+    """Get extraction job history"""
+    global _data_pipeline_service
+    
+    if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
+        return {"history": [], "total": 0}
+    
+    history = _data_pipeline_service.get_job_history(limit=limit)
+    return {"history": history, "total": len(history)}
+
+
+@api_router.get("/pipeline/logs")
+async def get_pipeline_logs(
+    limit: int = Query(default=100, le=500),
+    event_type: Optional[str] = None
+):
+    """Get pipeline event logs"""
+    global _data_pipeline_service
+    
+    if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
+        return {"logs": [], "total": 0}
+    
+    logs = _data_pipeline_service.get_logs(limit=limit, event_type=event_type)
+    return {"logs": logs, "total": len(logs)}
+
+
+@api_router.get("/pipeline/metrics")
+async def get_pipeline_metrics():
+    """Get detailed pipeline and API metrics"""
+    global _data_pipeline_service
+    
+    if not PIPELINE_SERVICE_AVAILABLE:
+        return {
+            "pipeline_available": False,
+            "message": "Pipeline not configured",
+            "pipeline_metrics": None,
+            "api_metrics": None
+        }
+    
+    if _data_pipeline_service is None:
+        _data_pipeline_service = init_pipeline_service(db=db, api_key=GROW_API_KEY)
+        await _data_pipeline_service.initialize()
+    
+    status = _data_pipeline_service.get_status()
+    
+    return {
+        "pipeline_available": True,
+        "pipeline_metrics": status.get("metrics"),
+        "api_metrics": status.get("extractor_metrics"),
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+@api_router.get("/pipeline/data-summary")
+async def get_pipeline_data_summary():
+    """Get summary of extracted data"""
+    global _data_pipeline_service
+    
+    if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
+        return {
+            "unique_symbols_extracted": 0,
+            "data_by_symbol": {},
+            "last_extraction_time": None
+        }
+    
+    return _data_pipeline_service.get_data_summary()
+
+
+@api_router.post("/pipeline/test-api")
+async def test_grow_api(request: APITestRequest = None):
+    """
+    Test the Groww API connection and fetch a sample quote.
+    Use this to validate API connectivity and response structure.
+    """
+    global _data_pipeline_service
+    
+    if not PIPELINE_SERVICE_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Data pipeline service not configured. GROW_API_KEY not set."
+        )
+    
+    if _data_pipeline_service is None:
+        _data_pipeline_service = init_pipeline_service(db=db, api_key=GROW_API_KEY)
+        await _data_pipeline_service.initialize()
+    
+    symbol = request.symbol if request else "RELIANCE"
+    
+    if not _data_pipeline_service.grow_extractor:
+        raise HTTPException(status_code=503, detail="Groww extractor not initialized")
+    
+    result = await _data_pipeline_service.grow_extractor.get_stock_quote(symbol)
+    
+    return {
+        "success": result.status.value == "success",
+        "message": f"API test {'successful' if result.status.value == 'success' else 'failed'} for {symbol}",
+        "latency_ms": result.latency_ms,
+        "data": result.data if result.status.value == "success" else None,
+        "error": result.error,
+        "retries": result.retries
+    }
+
+
+@api_router.get("/pipeline/default-symbols")
+async def get_default_symbols():
+    """Get the default list of symbols used for extraction"""
+    from services.pipeline_service import DataPipelineService
+    return {
+        "symbols": DataPipelineService.DEFAULT_SYMBOLS,
+        "count": len(DataPipelineService.DEFAULT_SYMBOLS)
+    }
+
+
 # Include router
 app.include_router(api_router)
 
