@@ -108,7 +108,7 @@ export default function DataPipeline() {
   const [jobs, setJobs] = useState([]);
   const [history, setHistory] = useState([]);
   const [logs, setLogs] = useState([]);
-  const [defaultSymbols, setDefaultSymbols] = useState([]);
+  const [symbolCategories, setSymbolCategories] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [testResult, setTestResult] = useState(null);
@@ -123,7 +123,7 @@ export default function DataPipeline() {
         getPipelineJobs(10).catch(e => ({ data: { jobs: [] } })),
         getPipelineHistory(20).catch(e => ({ data: { history: [] } })),
         getPipelineLogs(50).catch(e => ({ data: { logs: [] } })),
-        getDefaultSymbols().catch(e => ({ data: { symbols: [] } }))
+        getSymbolCategories().catch(e => getDefaultSymbols().catch(e => ({ data: { symbols: [] } })))
       ]);
       
       setStatus(statusRes.data);
