@@ -92,5 +92,21 @@ export const searchStocks = (query) => API.get("/search", { params: { q: query }
 // Health
 export const healthCheck = () => API.get("/health");
 
+// Data Pipeline
+export const getPipelineStatus = () => API.get("/pipeline/status");
+export const runPipelineExtraction = (request = {}) => API.post("/pipeline/run", request);
+export const startPipelineScheduler = (intervalMinutes = 30) => 
+  API.post("/pipeline/scheduler/start", { interval_minutes: intervalMinutes });
+export const stopPipelineScheduler = () => API.post("/pipeline/scheduler/stop");
+export const getPipelineJobs = (limit = 20) => API.get("/pipeline/jobs", { params: { limit } });
+export const getPipelineJob = (jobId) => API.get(`/pipeline/jobs/${jobId}`);
+export const getPipelineHistory = (limit = 50) => API.get("/pipeline/history", { params: { limit } });
+export const getPipelineLogs = (limit = 100, eventType = null) => 
+  API.get("/pipeline/logs", { params: { limit, event_type: eventType } });
+export const getPipelineMetrics = () => API.get("/pipeline/metrics");
+export const getPipelineDataSummary = () => API.get("/pipeline/data-summary");
+export const testGrowAPI = (symbol = "RELIANCE") => API.post("/pipeline/test-api", { symbol });
+export const getDefaultSymbols = () => API.get("/pipeline/default-symbols");
+
 export default API;
 
