@@ -153,7 +153,8 @@ class GrowwAPIExtractor:
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
-                "Accept": "application/json"
+                "Accept": "application/json",
+                "X-API-VERSION": "1.0"
             },
             timeout=aiohttp.ClientTimeout(total=30)
         )
