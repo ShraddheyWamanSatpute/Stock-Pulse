@@ -1563,6 +1563,157 @@ async def get_symbol_categories():
     return _data_pipeline_service.get_symbol_categories()
 
 
+# ==================== NSE BHAVCOPY API ====================
+
+@api_router.get("/bhavcopy/status")
+async def get_bhavcopy_status():
+    """Get NSE Bhavcopy extractor status and metrics"""
+    global _bhavcopy_extractor
+    
+    if not NSE_BHAVCOPY_AVAILABLE:
+        return {
+            "available": False,
+            "message": "NSE Bhavcopy extractor not available"
+        }
+    
+    if _bhavcopy_extractor is None:
+        _bhavcopy_extractor = get_bhavcopy_extractor()
+    
+    return {
+        "available": True,
+        "metrics": _bhavcopy_extractor.get_metrics(),
+        "cached_dates": _bhavcopy_extractor.get_cached_dates(),
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+@api_router.get("/bhavcopy/download/{date}")
+async def download_bhavcopy(date: str):
+    """
+    Download NSE Bhavcopy for a specific date.
+    
+    Date format: YYYY-MM-DD (e.g., 2025-02-17)
+    Returns delivery data, VWAP, and trade counts for all stocks.
+    """
+    global _bhavcopy_extractor
+    
+    if not NSE_BHAVCOPY_AVAILABLE:
+        raise HTTPException(status_code=503, detail="NSE Bhavcopy extractor not available")
+    
+    if _bhavcopy_extractor is None:
+        _bhavcopy_extractor = get_bhavcopy_extractor()
+        await _bhavcopy_extractor.initialize()
+    
+    try:
+        target_date = datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    
+    data = await _bhavcopy_extractor.download_bhavcopy(target_date)
+    
+    if data is None:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Bhavcopy not available for {date}. Market may be closed or data not yet published."
+        )
+    
+    return {
+        "date": date,
+        "records_count": len(data),
+        "data": [d.to_dict() for d in data[:100]],  # Limit to 100 records for response
+        "message": f"Downloaded {len(data)} records. Showing first 100."
+    }
+
+
+@api_router.get("/bhavcopy/symbol/{symbol}")
+async def get_bhavcopy_symbol(symbol: str, date: Optional[str] = None):
+    """
+    Get Bhavcopy data for a specific symbol.
+    
+    Returns delivery volume, delivery percentage, VWAP, and trade counts.
+    If date not provided, uses the last trading day.
+    """
+    global _bhavcopy_extractor
+    
+    if not NSE_BHAVCOPY_AVAILABLE:
+        raise HTTPException(status_code=503, detail="NSE Bhavcopy extractor not available")
+    
+    if _bhavcopy_extractor is None:
+        _bhavcopy_extractor = get_bhavcopy_extractor()
+        await _bhavcopy_extractor.initialize()
+    
+    target_date = None
+    if date:
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    
+    data = await _bhavcopy_extractor.get_symbol_data(symbol.upper(), target_date)
+    
+    if data is None:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Data not found for {symbol}. Check if the symbol is correct and market was open."
+        )
+    
+    return {
+        "symbol": symbol.upper(),
+        "data": data.to_dict()
+    }
+
+
+@api_router.post("/bhavcopy/symbols")
+async def get_bhavcopy_multiple_symbols(symbols: List[str], date: Optional[str] = None):
+    """
+    Get Bhavcopy data for multiple symbols.
+    
+    Returns delivery data, VWAP, and trade counts for each symbol.
+    """
+    global _bhavcopy_extractor
+    
+    if not NSE_BHAVCOPY_AVAILABLE:
+        raise HTTPException(status_code=503, detail="NSE Bhavcopy extractor not available")
+    
+    if _bhavcopy_extractor is None:
+        _bhavcopy_extractor = get_bhavcopy_extractor()
+        await _bhavcopy_extractor.initialize()
+    
+    target_date = None
+    if date:
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    
+    symbols_upper = [s.upper() for s in symbols]
+    data = await _bhavcopy_extractor.get_multiple_symbols(symbols_upper, target_date)
+    
+    return {
+        "requested": len(symbols),
+        "found": len(data),
+        "data": {k: v.to_dict() for k, v in data.items()},
+        "missing": [s for s in symbols_upper if s not in data]
+    }
+
+
+@api_router.get("/bhavcopy/metrics")
+async def get_bhavcopy_metrics():
+    """Get NSE Bhavcopy extraction metrics"""
+    global _bhavcopy_extractor
+    
+    if not NSE_BHAVCOPY_AVAILABLE:
+        return {"available": False}
+    
+    if _bhavcopy_extractor is None:
+        _bhavcopy_extractor = get_bhavcopy_extractor()
+    
+    return {
+        "available": True,
+        "metrics": _bhavcopy_extractor.get_metrics()
+    }
+
+
 # Include router
 app.include_router(api_router)
 
