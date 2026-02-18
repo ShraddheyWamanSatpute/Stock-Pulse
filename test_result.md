@@ -202,6 +202,30 @@ backend:
           agent: "testing"
           comment: "✅ VERIFIED: Data extraction pipeline API endpoints working correctly. GET /api/extraction/status returns pipeline_available (true), available_extractors (['yfinance', 'nse_bhavcopy']), and features object with correct counts (160 field_definitions, 10 deal_breakers, 10 risk_penalties, 9 quality_boosters). GET /api/extraction/fields returns 160 total fields across 13 categories with proper field structure including name, field_id, data_type, unit, priority, update_frequency, source, used_for. All validation passed."
 
+  - task: "NSE Bhavcopy Integration"
+    implemented: true
+    working: true
+    file: "backend/data_extraction/extractors/nse_bhavcopy_extractor.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "✅ COMPLETE: NSE Bhavcopy extractor working. Downloaded 2,543 records. Getting VWAP, Total Trades, Turnover, ISIN for all stocks. Endpoints: /api/bhavcopy/status, /api/bhavcopy/symbol/{symbol}, /api/bhavcopy/symbols (POST), /api/bhavcopy/metrics."
+
+  - task: "Screener.in Fundamental Data Scraper"
+    implemented: false
+    working: false
+    file: ""
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: false
+          agent: "main"
+          comment: "Next to implement: Income Statement, Balance Sheet, Cash Flow, Ratios (60+ fields)"
+
   - task: "Groww API Data Pipeline Integration"
     implemented: true
     working: true
