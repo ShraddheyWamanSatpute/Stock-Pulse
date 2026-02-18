@@ -1,8 +1,9 @@
 # StockPulse - Development History & Technical Documentation
 
-> **Document Version**: 2.0  
+> **Document Version**: 2.1  
 > **Last Updated**: February 2026  
 > **Platform**: Indian Stock Market Analysis Platform (NSE/BSE)
+> **Live Data**: Groww Trading API Integration
 
 ---
 
