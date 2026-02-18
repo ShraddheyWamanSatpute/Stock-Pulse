@@ -215,6 +215,18 @@ backend:
           comment: "✅ COMPLETE: NSE Bhavcopy extractor working. Downloaded 2,543 records. Getting VWAP, Total Trades, Turnover, ISIN for all stocks. Endpoints: /api/bhavcopy/status, /api/bhavcopy/symbol/{symbol}, /api/bhavcopy/symbols (POST), /api/bhavcopy/metrics."
 
   - task: "Screener.in Fundamental Data Scraper"
+    implemented: true
+    working: true
+    file: "backend/data_extraction/extractors/screener_extractor.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "✅ COMPLETE: Screener.in scraper working. Getting company name, sector, industry, market cap, P/E, book value, ROE, ROCE, EPS, historical income statement. Endpoints: /api/screener/status, /api/screener/company/{symbol}, /api/screener/companies (POST)."
+
+  - task: "pandas-ta Technical Indicators Calculator"
     implemented: false
     working: false
     file: ""
@@ -224,7 +236,7 @@ backend:
     status_history:
         - working: false
           agent: "main"
-          comment: "Next to implement: Income Statement, Balance Sheet, Cash Flow, Ratios (60+ fields)"
+          comment: "Next to implement: SMA, EMA, RSI, MACD, Bollinger Bands (15 technical indicators)"
 
   - task: "Groww API Data Pipeline Integration"
     implemented: true
