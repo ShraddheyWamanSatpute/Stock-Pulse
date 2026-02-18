@@ -296,6 +296,26 @@ Added new endpoints:
 | `/api/extraction/fields` | GET | 160 field definitions |
 | `/api/extraction/run` | POST | Trigger extraction |
 
+### Data Pipeline (Groww API) - NEW
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/pipeline/status` | GET | Pipeline status & metrics |
+| `/api/pipeline/test-api` | POST | Test Groww API connection |
+| `/api/pipeline/run` | POST | Trigger extraction job |
+| `/api/pipeline/scheduler/start` | POST | Start auto-scheduler |
+| `/api/pipeline/scheduler/stop` | POST | Stop scheduler |
+| `/api/pipeline/scheduler/config` | PUT | Update scheduler settings |
+| `/api/pipeline/jobs` | GET | List extraction jobs |
+| `/api/pipeline/jobs/{job_id}` | GET | Get job details |
+| `/api/pipeline/history` | GET | Job history |
+| `/api/pipeline/logs` | GET | Pipeline event logs |
+| `/api/pipeline/metrics` | GET | Detailed API metrics |
+| `/api/pipeline/data-summary` | GET | Extracted data summary |
+| `/api/pipeline/default-symbols` | GET | Tracked symbols |
+| `/api/pipeline/symbol-categories` | GET | Symbols by category |
+| `/api/pipeline/symbols/add` | POST | Add new symbols |
+| `/api/pipeline/symbols/remove` | POST | Remove symbols |
+
 ---
 
 ## 📊 Scoring System Documentation
