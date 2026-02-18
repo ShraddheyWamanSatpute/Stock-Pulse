@@ -325,6 +325,51 @@ Added new endpoints:
 
 ## 🔄 Data Extraction Pipeline
 
+### Live Data Pipeline (Groww API) - NEW
+
+The platform now supports live market data extraction via the official Groww Trading API.
+
+#### Architecture
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    GROWW API PIPELINE                        │
+├─────────────────────────────────────────────────────────────┤
+│  GrowwAPIExtractor                                           │
+│  ├── JWT Authentication with X-API-VERSION header           │
+│  ├── Rate Limiting (10/sec, 300/min)                        │
+│  ├── Retry Mechanism (5 retries, exponential backoff)       │
+│  └── Metrics Tracking (latency, success rate, errors)       │
+├─────────────────────────────────────────────────────────────┤
+│  DataPipelineService                                         │
+│  ├── Scheduler (auto-start, configurable interval)          │
+│  ├── Job Management (create, track, history)                │
+│  ├── Symbol Management (143 symbols, 3 categories)          │
+│  └── Logging & Audit Trail                                   │
+├─────────────────────────────────────────────────────────────┤
+│  Monitoring Dashboard                                        │
+│  ├── Real-time Status Display                               │
+│  ├── API Metrics Visualization                              │
+│  ├── Job History & Logs                                     │
+│  └── Data Quality Alerts                                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### Symbol Categories (143 Total)
+| Category | Count | Color Code | Examples |
+|----------|-------|------------|----------|
+| NIFTY 50 | 50 | Blue | RELIANCE, TCS, HDFCBANK, INFY |
+| NIFTY Next 50 | 50 | Purple | ADANIGREEN, AMBUJACEM, DMART |
+| Mid & Small Caps | 43 | Green | AUROPHARMA, PERSISTENT, MRF |
+
+#### Pipeline Performance Metrics
+| Metric | Value |
+|--------|-------|
+| API Success Rate | ~95%+ |
+| Average Latency | 300-350ms |
+| Scheduler Interval | 15 minutes (configurable) |
+| Max Retries | 5 with exponential backoff |
+| Rate Limit | 10 req/sec, 300 req/min |
+
 ### 160 Fields Across 13 Categories
 
 | Category | Field Count | Examples |
