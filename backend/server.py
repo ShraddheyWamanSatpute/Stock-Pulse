@@ -1724,6 +1724,115 @@ async def get_bhavcopy_metrics():
     }
 
 
+# ==================== SCREENER.IN API ====================
+
+@api_router.get("/screener/status")
+async def get_screener_status():
+    """Get Screener.in extractor status and metrics"""
+    global _screener_extractor
+    
+    if not SCREENER_AVAILABLE:
+        return {
+            "available": False,
+            "message": "Screener.in extractor not available"
+        }
+    
+    if _screener_extractor is None:
+        _screener_extractor = get_screener_extractor()
+    
+    return {
+        "available": True,
+        "metrics": _screener_extractor.get_metrics(),
+        "cached_symbols": _screener_extractor.get_cached_symbols(),
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+@api_router.get("/screener/company/{symbol}")
+async def get_screener_company(symbol: str, consolidated: bool = Query(default=True)):
+    """
+    Get comprehensive financial data for a company from Screener.in.
+    
+    Returns:
+    - Income Statement (Revenue, Profit, EPS, Margins)
+    - Balance Sheet (Assets, Debt, Equity)
+    - Cash Flow (OCF, FCF)
+    - Financial Ratios (ROE, ROCE, D/E)
+    - Shareholding (Promoter, FII, DII)
+    """
+    global _screener_extractor
+    
+    if not SCREENER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Screener.in extractor not available")
+    
+    if _screener_extractor is None:
+        _screener_extractor = get_screener_extractor()
+        await _screener_extractor.initialize()
+    
+    data = await _screener_extractor.get_financial_data(symbol.upper(), consolidated)
+    
+    if data is None:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Company not found: {symbol}. Check if the symbol is correct."
+        )
+    
+    return {
+        "symbol": symbol.upper(),
+        "data": data.to_dict()
+    }
+
+
+@api_router.post("/screener/companies")
+async def get_screener_multiple_companies(symbols: List[str], consolidated: bool = Query(default=True)):
+    """
+    Get financial data for multiple companies from Screener.in.
+    
+    Note: This may take time due to rate limiting (2 seconds between requests).
+    """
+    global _screener_extractor
+    
+    if not SCREENER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Screener.in extractor not available")
+    
+    if _screener_extractor is None:
+        _screener_extractor = get_screener_extractor()
+        await _screener_extractor.initialize()
+    
+    if len(symbols) > 10:
+        raise HTTPException(
+            status_code=400, 
+            detail="Maximum 10 symbols allowed per request due to rate limiting"
+        )
+    
+    symbols_upper = [s.upper() for s in symbols]
+    data = await _screener_extractor.get_multiple_companies(symbols_upper, consolidated)
+    
+    return {
+        "requested": len(symbols),
+        "found": len(data),
+        "data": {k: v.to_dict() for k, v in data.items()},
+        "missing": [s for s in symbols_upper if s not in data]
+    }
+
+
+@api_router.get("/screener/metrics")
+async def get_screener_metrics():
+    """Get Screener.in extraction metrics"""
+    global _screener_extractor
+    
+    if not SCREENER_AVAILABLE:
+        return {"available": False}
+    
+    if _screener_extractor is None:
+        _screener_extractor = get_screener_extractor()
+    
+    return {
+        "available": True,
+        "metrics": _screener_extractor.get_metrics()
+    }
+
+
 # Include router
 app.include_router(api_router)
 
