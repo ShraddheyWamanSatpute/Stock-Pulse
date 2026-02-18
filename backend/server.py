@@ -106,6 +106,16 @@ except ImportError as e:
     logger.warning(f"NSE Bhavcopy extractor not available: {e}")
     NSE_BHAVCOPY_AVAILABLE = False
     _bhavcopy_extractor = None
+
+# Import Screener.in Extractor
+try:
+    from data_extraction.extractors.screener_extractor import ScreenerExtractor, get_screener_extractor
+    SCREENER_AVAILABLE = True
+    _screener_extractor = None
+except ImportError as e:
+    logger.warning(f"Screener.in extractor not available: {e}")
+    SCREENER_AVAILABLE = False
+    _screener_extractor = None
     PIPELINE_SERVICE_AVAILABLE = False
     _data_pipeline_service = None
     GROW_API_KEY = ''
