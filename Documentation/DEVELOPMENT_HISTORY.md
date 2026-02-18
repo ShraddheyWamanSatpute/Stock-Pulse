@@ -377,7 +377,55 @@ Added new endpoints:
 
 ## 📝 Changelog
 
-### Version 2.0 (February 2026 - Current Session)
+### Version 2.1 (February 2026 - Latest Session)
+- ✅ **Groww API Integration** - Live Indian stock market data pipeline
+  - Connected to official Groww Trading API with JWT authentication
+  - Implemented retry mechanism with exponential backoff (5 max retries)
+  - Rate limiting (10 req/sec, 300 req/min) with automatic throttling
+  - API validation and health checks on startup
+  
+- ✅ **Expanded Stock Symbol Tracking (30 → 143 symbols)**
+  - NIFTY 50 (50 stocks): RELIANCE, TCS, HDFCBANK, INFY, etc.
+  - NIFTY Next 50 (50 stocks): ADANIGREEN, AMBUJACEM, BANKBARODA, etc.
+  - Mid & Small Caps (43 stocks): AUROPHARMA, BANDHANBNK, etc.
+
+- ✅ **Automated Data Collection Scheduler**
+  - Auto-starts on server boot (15-minute interval default)
+  - Configurable interval via API endpoint
+  - Background execution with full monitoring
+
+- ✅ **Data Pipeline Monitoring Dashboard** (New Page: `/data-pipeline`)
+  - Real-time pipeline status display
+  - API metrics: requests, success rate, latency, retries
+  - Categorized symbol display (color-coded by index)
+  - Job history and event logs
+  - Data quality alerts for missing/delayed data
+
+- ✅ **New API Endpoints Added**:
+  | Endpoint | Method | Description |
+  |----------|--------|-------------|
+  | `/api/pipeline/status` | GET | Pipeline status & metrics |
+  | `/api/pipeline/test-api` | POST | Test Groww API connection |
+  | `/api/pipeline/run` | POST | Trigger extraction job |
+  | `/api/pipeline/scheduler/start` | POST | Start auto-scheduler |
+  | `/api/pipeline/scheduler/stop` | POST | Stop scheduler |
+  | `/api/pipeline/jobs` | GET | List extraction jobs |
+  | `/api/pipeline/logs` | GET | Pipeline event logs |
+  | `/api/pipeline/metrics` | GET | Detailed metrics |
+  | `/api/pipeline/symbol-categories` | GET | Symbols by category |
+  | `/api/pipeline/symbols/add` | POST | Add new symbols |
+  | `/api/pipeline/symbols/remove` | POST | Remove symbols |
+  | `/api/pipeline/scheduler/config` | PUT | Update scheduler config |
+
+- ✅ **Files Added/Modified**:
+  - `backend/data_extraction/extractors/grow_extractor.py` - Groww API extractor
+  - `backend/services/pipeline_service.py` - Pipeline management service
+  - `backend/models/pipeline_models.py` - Pydantic models for pipeline
+  - `frontend/src/pages/DataPipeline.jsx` - Monitoring dashboard
+  - `backend/server.py` - Added 12 new pipeline endpoints
+  - `frontend/src/lib/api.js` - Added pipeline API functions
+
+### Version 2.0 (February 2026 - Previous Session)
 - ✅ Completed D1-D10 Deal-Breakers implementation
 - ✅ Completed R1-R10 Risk Penalties implementation
 - ✅ Completed Q1-Q9 Quality Boosters implementation
