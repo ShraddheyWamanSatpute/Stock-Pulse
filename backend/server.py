@@ -97,6 +97,19 @@ except ImportError as e:
     _data_pipeline_service = None
     GROW_API_KEY = ''
 
+# Import NSE Bhavcopy Extractor
+try:
+    from data_extraction.extractors.nse_bhavcopy_extractor import NSEBhavcopyExtractor, get_bhavcopy_extractor
+    NSE_BHAVCOPY_AVAILABLE = True
+    _bhavcopy_extractor = None
+except ImportError as e:
+    logger.warning(f"NSE Bhavcopy extractor not available: {e}")
+    NSE_BHAVCOPY_AVAILABLE = False
+    _bhavcopy_extractor = None
+    PIPELINE_SERVICE_AVAILABLE = False
+    _data_pipeline_service = None
+    GROW_API_KEY = ''
+
 # Configuration
 USE_REAL_DATA = os.environ.get('USE_REAL_DATA', 'true').lower() == 'true'
 
