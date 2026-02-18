@@ -88,14 +88,16 @@ try:
         LogsResponse, DataSummaryResponse, APITestRequest, APITestResponse,
         PipelineStatusResponse, JobResponse
     )
-    GROW_API_KEY = os.environ.get('GROW_API_KEY', '')
-    PIPELINE_SERVICE_AVAILABLE = bool(GROW_API_KEY)
+    GROW_TOTP_TOKEN = os.environ.get('GROW_TOTP_TOKEN', '')
+    GROW_SECRET_KEY = os.environ.get('GROW_SECRET_KEY', '')
+    PIPELINE_SERVICE_AVAILABLE = bool(GROW_TOTP_TOKEN and GROW_SECRET_KEY)
     _data_pipeline_service = None
 except ImportError as e:
     logger.warning(f"Data pipeline service not available: {e}")
     PIPELINE_SERVICE_AVAILABLE = False
     _data_pipeline_service = None
-    GROW_API_KEY = ''
+    GROW_TOTP_TOKEN = ''
+    GROW_SECRET_KEY = ''
 
 # Import NSE Bhavcopy Extractor
 try:
@@ -118,7 +120,8 @@ except ImportError as e:
     _screener_extractor = None
     PIPELINE_SERVICE_AVAILABLE = False
     _data_pipeline_service = None
-    GROW_API_KEY = ''
+    GROW_TOTP_TOKEN = ''
+    GROW_SECRET_KEY = ''
 
 # Configuration
 USE_REAL_DATA = os.environ.get('USE_REAL_DATA', 'true').lower() == 'true'
@@ -1272,14 +1275,14 @@ async def get_pipeline_status():
     if not PIPELINE_SERVICE_AVAILABLE:
         return {
             "status": "unavailable",
-            "message": "Data pipeline service not configured. GROW_API_KEY not set.",
+            "message": "Data pipeline service not configured. GROW_TOTP_TOKEN/GROW_SECRET_KEY not set.",
             "is_running": False,
             "metrics": None,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
     
     if _data_pipeline_service is None:
-        _data_pipeline_service = init_pipeline_service(db=db, api_key=GROW_API_KEY)
+        _data_pipeline_service = init_pipeline_service(db=db, totp_token=GROW_TOTP_TOKEN, secret_key=GROW_SECRET_KEY)
         await _data_pipeline_service.initialize()
     
     return _data_pipeline_service.get_status()
@@ -1298,11 +1301,11 @@ async def run_pipeline_extraction(request: RunExtractionRequest = None):
     if not PIPELINE_SERVICE_AVAILABLE:
         raise HTTPException(
             status_code=503,
-            detail="Data pipeline service not configured. GROW_API_KEY not set."
+            detail="Data pipeline service not configured. GROW_TOTP_TOKEN/GROW_SECRET_KEY not set."
         )
     
     if _data_pipeline_service is None:
-        _data_pipeline_service = init_pipeline_service(db=db, api_key=GROW_API_KEY)
+        _data_pipeline_service = init_pipeline_service(db=db, totp_token=GROW_TOTP_TOKEN, secret_key=GROW_SECRET_KEY)
         await _data_pipeline_service.initialize()
     
     symbols = request.symbols if request and request.symbols else None
@@ -1327,11 +1330,11 @@ async def start_pipeline_scheduler(request: StartSchedulerRequest = None):
     if not PIPELINE_SERVICE_AVAILABLE:
         raise HTTPException(
             status_code=503,
-            detail="Data pipeline service not configured. GROW_API_KEY not set."
+            detail="Data pipeline service not configured. GROW_TOTP_TOKEN/GROW_SECRET_KEY not set."
         )
     
     if _data_pipeline_service is None:
-        _data_pipeline_service = init_pipeline_service(db=db, api_key=GROW_API_KEY)
+        _data_pipeline_service = init_pipeline_service(db=db, totp_token=GROW_TOTP_TOKEN, secret_key=GROW_SECRET_KEY)
         await _data_pipeline_service.initialize()
     
     interval = request.interval_minutes if request else 30
@@ -1351,7 +1354,7 @@ async def stop_pipeline_scheduler():
     if not PIPELINE_SERVICE_AVAILABLE:
         raise HTTPException(
             status_code=503,
-            detail="Data pipeline service not configured. GROW_API_KEY not set."
+            detail="Data pipeline service not configured. GROW_TOTP_TOKEN/GROW_SECRET_KEY not set."
         )
     
     if _data_pipeline_service is None:
@@ -1433,7 +1436,7 @@ async def get_pipeline_metrics():
         }
     
     if _data_pipeline_service is None:
-        _data_pipeline_service = init_pipeline_service(db=db, api_key=GROW_API_KEY)
+        _data_pipeline_service = init_pipeline_service(db=db, totp_token=GROW_TOTP_TOKEN, secret_key=GROW_SECRET_KEY)
         await _data_pipeline_service.initialize()
     
     status = _data_pipeline_service.get_status()
@@ -1472,11 +1475,11 @@ async def test_grow_api(request: APITestRequest = None):
     if not PIPELINE_SERVICE_AVAILABLE:
         raise HTTPException(
             status_code=503,
-            detail="Data pipeline service not configured. GROW_API_KEY not set."
+            detail="Data pipeline service not configured. GROW_TOTP_TOKEN/GROW_SECRET_KEY not set."
         )
     
     if _data_pipeline_service is None:
-        _data_pipeline_service = init_pipeline_service(db=db, api_key=GROW_API_KEY)
+        _data_pipeline_service = init_pipeline_service(db=db, totp_token=GROW_TOTP_TOKEN, secret_key=GROW_SECRET_KEY)
         await _data_pipeline_service.initialize()
     
     symbol = request.symbol if request else "RELIANCE"
@@ -1906,13 +1909,13 @@ async def startup_event():
     # Initialize Data Pipeline Service
     if PIPELINE_SERVICE_AVAILABLE:
         try:
-            _data_pipeline_service = init_pipeline_service(db=db, api_key=GROW_API_KEY)
+            _data_pipeline_service = init_pipeline_service(db=db, totp_token=GROW_TOTP_TOKEN, secret_key=GROW_SECRET_KEY)
             await _data_pipeline_service.initialize()
             logger.info("Data pipeline service initialized with Groww API")
         except Exception as e:
             logger.error(f"Failed to initialize data pipeline service: {e}")
     else:
-        logger.warning("Data pipeline service not available (GROW_API_KEY not set)")
+        logger.warning("Data pipeline service not available (GROW_TOTP_TOKEN/GROW_SECRET_KEY not set)")
     
     logger.info("StockPulse API ready!")
 

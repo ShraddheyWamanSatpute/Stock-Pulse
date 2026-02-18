@@ -1,6 +1,6 @@
 """
 Groww API Extractor for Indian Stock Market Data
-Implements data extraction with retry mechanism, rate limiting, and comprehensive logging
+Implements data extraction with TOTP authentication, retry mechanism, rate limiting, and comprehensive logging
 """
 
 import asyncio
@@ -104,12 +104,18 @@ class ExtractionResult:
 
 class GrowwAPIExtractor:
     """
-    Groww API Extractor with comprehensive error handling,
-    retry mechanism, and monitoring capabilities
+    Groww API Extractor with TOTP authentication, comprehensive error handling,
+    retry mechanism, and monitoring capabilities.
+    
+    Authentication flow:
+    1. Generate OTP from secret_key using pyotp
+    2. Exchange TOTP token + OTP for an access token via POST /v1/token/api/access
+    3. Use access token as Bearer for all subsequent API calls
     """
     
     # API Configuration
     BASE_URL = "https://api.groww.in/v1"
+    TOKEN_ENDPOINT = "/token/api/access"
     
     # Rate Limits (per API documentation)
     RATE_LIMITS = {
@@ -124,16 +130,21 @@ class GrowwAPIExtractor:
     MAX_BACKOFF_SECONDS = 60
     BACKOFF_MULTIPLIER = 2
     
-    def __init__(self, api_key: str, db=None):
+    def __init__(self, totp_token: str, secret_key: str, db=None, api_key: str = None):
         """
         Initialize the Groww API extractor
         
         Args:
-            api_key: Groww API authentication token
+            totp_token: Groww TOTP JWT token (used for token exchange)
+            secret_key: Base32 secret key for generating OTP codes
             db: MongoDB database instance for storing results
+            api_key: (Deprecated) Legacy parameter, ignored if totp_token is provided
         """
-        self.api_key = api_key
+        self.totp_token = totp_token
+        self.secret_key = secret_key
         self.db = db
+        self.access_token: Optional[str] = None
+        self.access_token_obtained_at: Optional[datetime] = None
         self.metrics = APIMetrics()
         self.session: Optional[aiohttp.ClientSession] = None
         self._request_timestamps: List[float] = []
@@ -143,15 +154,121 @@ class GrowwAPIExtractor:
         # Extraction state tracking
         self._extraction_jobs: Dict[str, Dict] = {}
         self._extraction_history: List[Dict] = []
+    
+    async def _obtain_access_token(self) -> str:
+        """
+        Obtain an access token by exchanging TOTP token + OTP.
+        
+        Steps:
+        1. Generate OTP from the secret key using pyotp
+        2. POST to token exchange endpoint with TOTP token and OTP
+        3. Return the access token from the response
+        """
+        try:
+            import pyotp
+        except ImportError:
+            raise AuthenticationError("pyotp is required for TOTP authentication. Install with: pip install pyotp")
+        
+        # Generate current OTP from secret key
+        totp = pyotp.TOTP(self.secret_key)
+        current_otp = totp.now()
+        
+        logger.info(f"Generated TOTP OTP for token exchange (OTP length: {len(current_otp)})")
+        
+        # Create a temporary session for the token exchange
+        async with aiohttp.ClientSession(
+            headers={
+                "Authorization": f"Bearer {self.totp_token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as temp_session:
+            url = f"{self.BASE_URL}{self.TOKEN_ENDPOINT}"
+            payload = {
+                "key_type": "totp",
+                "totp": current_otp
+            }
+            
+            logger.info(f"Requesting access token from {url}")
+            
+            async with temp_session.post(url, json=payload) as response:
+                response_text = await response.text()
+                
+                if response.status == 200:
+                    try:
+                        data = json.loads(response_text)
+                    except json.JSONDecodeError:
+                        raise AuthenticationError(f"Invalid JSON in token response: {response_text[:200]}")
+                    
+                    # Extract access token - try common response field names
+                    access_token = data.get("access_token")
+                    if not access_token:
+                        access_token = data.get("token")
+                    if not access_token and isinstance(data.get("payload"), dict):
+                        access_token = data["payload"].get("access_token") or data["payload"].get("token")
+                    if not access_token and isinstance(data.get("data"), dict):
+                        access_token = data["data"].get("access_token") or data["data"].get("token")
+                    
+                    if not access_token:
+                        # Log the response structure for debugging
+                        logger.error(f"Token response structure: {json.dumps(data, indent=2)[:500]}")
+                        raise AuthenticationError(f"Access token not found in response. Keys: {list(data.keys())}")
+                    
+                    self.access_token = access_token
+                    self.access_token_obtained_at = datetime.now(timezone.utc)
+                    logger.info(f"Access token obtained successfully (length: {len(access_token)})")
+                    return access_token
+                    
+                elif response.status == 401:
+                    raise AuthenticationError(f"Authentication failed (401): {response_text[:300]}")
+                elif response.status == 403:
+                    raise AuthenticationError(f"Access forbidden (403): {response_text[:300]}")
+                else:
+                    raise AuthenticationError(
+                        f"Token exchange failed with status {response.status}: {response_text[:300]}"
+                    )
+    
+    async def _refresh_access_token(self):
+        """Refresh the access token if it may have expired"""
+        logger.info("Refreshing access token...")
+        try:
+            await self._obtain_access_token()
+            
+            # Update the session headers with new token
+            if self.session and not self.session.closed:
+                await self.session.close()
+            
+            self.session = aiohttp.ClientSession(
+                headers={
+                    "Authorization": f"Bearer {self.access_token}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "X-API-VERSION": "1.0"
+                },
+                timeout=aiohttp.ClientTimeout(total=30)
+            )
+            logger.info("Session refreshed with new access token")
+        except Exception as e:
+            logger.error(f"Failed to refresh access token: {e}")
+            raise
         
     async def initialize(self):
-        """Initialize the HTTP session and validate API key"""
+        """Initialize the HTTP session: obtain access token and validate API connection"""
         if self._is_initialized:
             return
-            
+        
+        # Step 1: Obtain access token via TOTP exchange
+        try:
+            await self._obtain_access_token()
+        except AuthenticationError as e:
+            logger.error(f"TOTP authentication failed: {e}")
+            raise
+        
+        # Step 2: Create session with the access token
         self.session = aiohttp.ClientSession(
             headers={
-                "Authorization": f"Bearer {self.api_key}",
+                "Authorization": f"Bearer {self.access_token}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
                 "X-API-VERSION": "1.0"
@@ -159,7 +276,7 @@ class GrowwAPIExtractor:
             timeout=aiohttp.ClientTimeout(total=30)
         )
         
-        # Validate API key with a test request
+        # Step 3: Validate API key with a test request
         try:
             test_result = await self._test_api_connection()
             if not test_result["success"]:
@@ -196,7 +313,7 @@ class GrowwAPIExtractor:
                     else:
                         return {"success": False, "message": f"API returned: {data.get('error', {}).get('message', 'Unknown error')}"}
                 elif response.status == 401:
-                    return {"success": False, "message": "Authentication failed - invalid or expired API token"}
+                    return {"success": False, "message": "Authentication failed - invalid or expired access token"}
                 elif response.status == 403:
                     return {"success": False, "message": "Access forbidden - check API permissions"}
                 else:
@@ -252,7 +369,7 @@ class GrowwAPIExtractor:
         data: Optional[Dict] = None
     ) -> Tuple[bool, Dict, float]:
         """
-        Make an API request with rate limiting
+        Make an API request with rate limiting and auto token refresh on 401.
         
         Returns:
             Tuple of (success, response_data, latency_ms)
@@ -269,10 +386,38 @@ class GrowwAPIExtractor:
             if method.upper() == "GET":
                 async with self.session.get(url, params=params) as response:
                     latency = (time.time() - start_time) * 1000
+                    
+                    # If 401, try refreshing the token once
+                    if response.status == 401:
+                        logger.info("Got 401, attempting token refresh...")
+                        try:
+                            await self._refresh_access_token()
+                            # Retry the request with new token
+                            async with self.session.get(url, params=params) as retry_response:
+                                latency = (time.time() - start_time) * 1000
+                                return await self._process_response(retry_response, latency)
+                        except Exception as e:
+                            logger.error(f"Token refresh failed: {e}")
+                            return await self._process_response(response, latency)
+                    
                     return await self._process_response(response, latency)
+                    
             elif method.upper() == "POST":
                 async with self.session.post(url, json=data, params=params) as response:
                     latency = (time.time() - start_time) * 1000
+                    
+                    # If 401, try refreshing the token once
+                    if response.status == 401:
+                        logger.info("Got 401, attempting token refresh...")
+                        try:
+                            await self._refresh_access_token()
+                            async with self.session.post(url, json=data, params=params) as retry_response:
+                                latency = (time.time() - start_time) * 1000
+                                return await self._process_response(retry_response, latency)
+                        except Exception as e:
+                            logger.error(f"Token refresh failed: {e}")
+                            return await self._process_response(response, latency)
+                    
                     return await self._process_response(response, latency)
         except asyncio.TimeoutError:
             latency = (time.time() - start_time) * 1000
@@ -371,6 +516,11 @@ class GrowwAPIExtractor:
                     logger.warning(f"Rate limit for {symbol}, retry {retries}/{self.MAX_RETRIES} after {backoff:.2f}s")
                     await asyncio.sleep(backoff)
                     continue
+                elif data.get("code") == 400:
+                    # Bad request — symbol format issue, don't retry
+                    last_error = data.get("error", "Bad request - invalid symbol")
+                    logger.warning(f"Bad request for {symbol} (not retrying): {last_error}")
+                    break
                 else:
                     last_error = data.get("error", "Unknown error")
                     retries += 1

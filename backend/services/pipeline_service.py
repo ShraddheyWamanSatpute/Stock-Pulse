@@ -131,7 +131,7 @@ class DataPipelineService:
         "HCLTECH", "WIPRO", "ULTRACEMCO", "TITAN", "NESTLEIND",
         "SUNPHARMA", "BAJAJFINSV", "ONGC", "NTPC", "POWERGRID",
         "M&M", "TATASTEEL", "ADANIENT", "TECHM", "JSWSTEEL",
-        "TATAMOTORS", "INDUSINDBK", "COALINDIA", "HINDALCO", "GRASIM",
+        "TATAMOTOR", "INDUSINDBK", "COALINDIA", "HINDALCO", "GRASIM",
         "ADANIPORTS", "DRREDDY", "APOLLOHOSP", "CIPLA", "EICHERMOT",
         "BPCL", "DIVISLAB", "BRITANNIA", "HEROMOTOCO", "SBILIFE",
         "HDFCLIFE", "TATACONSUM", "BAJAJ-AUTO", "SHRIRAMFIN", "LTIM",
@@ -566,16 +566,20 @@ def get_pipeline_service() -> Optional[DataPipelineService]:
     return _pipeline_service
 
 
-def init_pipeline_service(db=None, api_key: Optional[str] = None) -> DataPipelineService:
+def init_pipeline_service(db=None, totp_token: Optional[str] = None, secret_key: Optional[str] = None, api_key: Optional[str] = None) -> DataPipelineService:
     """Initialize the global pipeline service"""
     global _pipeline_service
     
     from data_extraction.extractors.grow_extractor import GrowwAPIExtractor
     
     grow_extractor = None
-    if api_key:
-        grow_extractor = GrowwAPIExtractor(api_key=api_key, db=db)
+    if totp_token and secret_key:
+        grow_extractor = GrowwAPIExtractor(totp_token=totp_token, secret_key=secret_key, db=db)
+    elif api_key:
+        # Legacy fallback - won't work for TOTP-based auth but keeps backward compatibility
+        grow_extractor = GrowwAPIExtractor(totp_token=api_key, secret_key='', db=db)
     
     _pipeline_service = DataPipelineService(db=db, grow_extractor=grow_extractor)
     
     return _pipeline_service
+
