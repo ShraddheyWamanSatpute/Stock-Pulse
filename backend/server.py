@@ -27,6 +27,8 @@ from services.mock_data import (
 )
 from services.scoring_engine import generate_analysis, generate_ml_prediction
 from services.llm_service import generate_stock_insight, summarize_news
+from services.cache_service import init_cache_service, get_cache_service, CacheService
+from services.timeseries_store import init_timeseries_store, get_timeseries_store, TimeSeriesStore
 
 # Import real market data service
 try:
@@ -57,6 +59,14 @@ mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 db_name = os.environ.get('MONGO_DB_NAME', os.environ.get('DB_NAME', 'stockpulse'))
 client = AsyncIOMotorClient(mongo_url)
 db = client[db_name]
+
+# Redis connection
+redis_url = os.environ.get('REDIS_URL', 'redis://localhost:6379')
+cache = init_cache_service(redis_url)
+
+# PostgreSQL time-series DSN
+timeseries_dsn = os.environ.get('TIMESERIES_DSN', 'postgresql://localhost:5432/stockpulse_ts')
+_ts_store = None  # initialized async in startup
 
 # Initialize Alerts Service
 try:
@@ -137,11 +147,7 @@ logger.info(f"Real data available: {REAL_DATA_AVAILABLE}")
 logger.info(f"Use real data: {USE_REAL_DATA}")
 logger.info(f"Data source: {'Real (Yahoo Finance)' if REAL_DATA_AVAILABLE and USE_REAL_DATA else 'Mock Data'}")
 
-# Cache for stock data
-_stock_cache = {}
-_cache_timestamp = None
-_real_data_cache = {}
-_real_cache_timestamp = None
+# Cache TTL constants (used with Redis cache service)
 CACHE_TTL = 300  # 5 minutes for mock data
 REAL_CACHE_TTL = 60  # 1 minute for real data
 
@@ -202,15 +208,16 @@ def _calculate_technicals(history: list, quote: dict) -> dict:
 
 # Helper functions
 def get_cached_stocks():
-    global _stock_cache, _cache_timestamp
-    now = datetime.now(timezone.utc)
+    """Get stock data with Redis caching (fallback to in-memory)."""
+    cached = cache.get_stock_list() if cache else None
+    if cached is not None:
+        return cached
     
-    if _cache_timestamp is None or (now - _cache_timestamp).seconds > CACHE_TTL:
-        stocks = get_all_stocks()
-        _stock_cache = {s["symbol"]: s for s in stocks}
-        _cache_timestamp = now
-    
-    return _stock_cache
+    stocks = get_all_stocks()
+    stock_map = {s["symbol"]: s for s in stocks}
+    if cache:
+        cache.set_stock_list(stock_map)
+    return stock_map
 
 
 # ==================== HEALTH CHECK ====================
@@ -222,6 +229,59 @@ async def root():
 @api_router.get("/health")
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+
+@api_router.get("/cache/stats")
+async def get_cache_stats():
+    """Get Redis cache statistics"""
+    if not cache:
+        return {"status": "unavailable", "message": "Cache service not initialized"}
+    return {
+        "status": "active",
+        **cache.get_stats()
+    }
+
+
+@api_router.delete("/cache/flush")
+async def flush_cache():
+    """Flush all cache entries (admin operation)"""
+    if cache:
+        cache.invalidate_all()
+        return {"message": "Cache flushed successfully"}
+    return {"message": "Cache not available"}
+
+
+@api_router.get("/timeseries/stats")
+async def get_timeseries_stats():
+    """Get PostgreSQL time-series database statistics"""
+    if not _ts_store:
+        return {"status": "unavailable", "message": "Time-series store not initialized"}
+    try:
+        stats = await _ts_store.get_stats()
+        return {"status": "active", **stats}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@api_router.get("/timeseries/prices/{symbol}")
+async def get_timeseries_prices(
+    symbol: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = Query(default=500, le=5000)
+):
+    """Get historical OHLCV data from PostgreSQL time-series store"""
+    if not _ts_store:
+        raise HTTPException(status_code=503, detail="Time-series store not available")
+    
+    prices = await _ts_store.get_prices(
+        symbol.upper(), start_date=start_date, end_date=end_date, limit=limit
+    )
+    return {
+        "symbol": symbol.upper(),
+        "count": len(prices),
+        "data": prices
+    }
 
 
 # ==================== MARKET OVERVIEW ====================
@@ -322,9 +382,16 @@ async def get_stock(symbol: str):
 
 @api_router.get("/stocks/{symbol}/analysis")
 async def get_stock_analysis(symbol: str):
-    """Get detailed analysis for a stock"""
-    stocks = get_cached_stocks()
+    """Get detailed analysis for a stock (with Redis caching)"""
     symbol = symbol.upper()
+    
+    # Check cache first
+    if cache:
+        cached_result = cache.get_analysis(symbol)
+        if cached_result is not None:
+            return cached_result
+    
+    stocks = get_cached_stocks()
     
     if symbol not in stocks:
         raise HTTPException(status_code=404, detail=f"Stock {symbol} not found")
@@ -333,13 +400,19 @@ async def get_stock_analysis(symbol: str):
     analysis = generate_analysis(stock_data)
     ml_prediction = generate_ml_prediction(stock_data)
     
-    return {
+    result = {
         "symbol": symbol,
         "name": stock_data["name"],
         "current_price": stock_data["current_price"],
         "analysis": analysis,
         "ml_prediction": ml_prediction
     }
+    
+    # Cache the result
+    if cache:
+        cache.set_analysis(symbol, result)
+    
+    return result
 
 
 @api_router.post("/stocks/{symbol}/llm-insight")
@@ -1349,7 +1422,7 @@ async def start_pipeline_scheduler(request: StartSchedulerRequest = None):
 @api_router.post("/pipeline/scheduler/stop")
 async def stop_pipeline_scheduler():
     """Stop the automatic data extraction scheduler"""
-    global _data_pipeline_service
+    # global _data_pipeline_service
     
     if not PIPELINE_SERVICE_AVAILABLE:
         raise HTTPException(
@@ -1371,7 +1444,7 @@ async def stop_pipeline_scheduler():
 @api_router.get("/pipeline/jobs")
 async def get_pipeline_jobs(limit: int = Query(default=20, le=100)):
     """Get list of recent extraction jobs"""
-    global _data_pipeline_service
+    # global _data_pipeline_service
     
     if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
         return {"jobs": [], "total": 0}
@@ -1383,7 +1456,7 @@ async def get_pipeline_jobs(limit: int = Query(default=20, le=100)):
 @api_router.get("/pipeline/jobs/{job_id}")
 async def get_pipeline_job(job_id: str):
     """Get details of a specific extraction job"""
-    global _data_pipeline_service
+    # global _data_pipeline_service
     
     if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1398,7 +1471,7 @@ async def get_pipeline_job(job_id: str):
 @api_router.get("/pipeline/history")
 async def get_pipeline_history(limit: int = Query(default=50, le=100)):
     """Get extraction job history"""
-    global _data_pipeline_service
+    # global _data_pipeline_service
     
     if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
         return {"history": [], "total": 0}
@@ -1413,7 +1486,7 @@ async def get_pipeline_logs(
     event_type: Optional[str] = None
 ):
     """Get pipeline event logs"""
-    global _data_pipeline_service
+    # global _data_pipeline_service
     
     if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
         return {"logs": [], "total": 0}
@@ -1452,7 +1525,7 @@ async def get_pipeline_metrics():
 @api_router.get("/pipeline/data-summary")
 async def get_pipeline_data_summary():
     """Get summary of extracted data"""
-    global _data_pipeline_service
+    # global _data_pipeline_service
     
     if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
         return {
@@ -1502,7 +1575,7 @@ async def test_grow_api(request: APITestRequest = None):
 @api_router.get("/pipeline/default-symbols")
 async def get_default_symbols():
     """Get the default list of symbols used for extraction"""
-    global _data_pipeline_service
+    # global _data_pipeline_service
     
     if _data_pipeline_service:
         return _data_pipeline_service.get_symbol_categories()
@@ -1517,7 +1590,7 @@ async def get_default_symbols():
 @api_router.post("/pipeline/symbols/add")
 async def add_pipeline_symbols(symbols: List[str]):
     """Add new symbols to the tracking list"""
-    global _data_pipeline_service
+    # global _data_pipeline_service
     
     if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
         raise HTTPException(status_code=503, detail="Pipeline service not available")
@@ -1532,7 +1605,7 @@ async def add_pipeline_symbols(symbols: List[str]):
 @api_router.post("/pipeline/symbols/remove")
 async def remove_pipeline_symbols(symbols: List[str]):
     """Remove symbols from the tracking list"""
-    global _data_pipeline_service
+    # global _data_pipeline_service
     
     if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
         raise HTTPException(status_code=503, detail="Pipeline service not available")
@@ -1550,7 +1623,7 @@ async def update_scheduler_config(
     auto_start: Optional[bool] = None
 ):
     """Update scheduler configuration"""
-    global _data_pipeline_service
+    # global _data_pipeline_service
     
     if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
         raise HTTPException(status_code=503, detail="Pipeline service not available")
@@ -1568,7 +1641,7 @@ async def update_scheduler_config(
 @api_router.get("/pipeline/symbol-categories")
 async def get_symbol_categories():
     """Get symbols organized by category (NIFTY 50, NIFTY Next 50, Mid/Small caps)"""
-    global _data_pipeline_service
+    # global _data_pipeline_service
     
     if not PIPELINE_SERVICE_AVAILABLE or _data_pipeline_service is None:
         raise HTTPException(status_code=503, detail="Pipeline service not available")
@@ -1898,9 +1971,22 @@ async def websocket_with_id(websocket: WebSocket, client_id: str):
 @app.on_event("startup")
 async def startup_event():
     """Start background services on app startup"""
-    global _data_pipeline_service
+    global _data_pipeline_service, _ts_store
     
     logger.info("Starting StockPulse API...")
+    
+    # Log cache status
+    if cache and cache.is_redis_available:
+        logger.info("Redis cache is active")
+    else:
+        logger.warning("Redis not available, using in-memory cache fallback")
+    
+    # Initialize PostgreSQL time-series store
+    try:
+        _ts_store = await init_timeseries_store(timeseries_dsn)
+        logger.info("PostgreSQL time-series store initialized")
+    except Exception as e:
+        logger.warning(f"Time-series store not available: {e}")
     
     if WEBSOCKET_AVAILABLE:
         await price_broadcaster.start()
@@ -1923,7 +2009,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on app shutdown"""
-    global _data_pipeline_service
+    # global _data_pipeline_service
     
     logger.info("Shutting down StockPulse API...")
     
@@ -1940,6 +2026,16 @@ async def shutdown_event():
             logger.info("Data pipeline service stopped")
         except Exception as e:
             logger.error(f"Error stopping pipeline service: {e}")
+    
+    # Close Redis connection
+    if cache:
+        cache.close()
+        logger.info("Redis cache connection closed")
+    
+    # Close PostgreSQL time-series store
+    if _ts_store:
+        await _ts_store.close()
+        logger.info("PostgreSQL time-series store closed")
     
     client.close()
     logger.info("Database connection closed")
