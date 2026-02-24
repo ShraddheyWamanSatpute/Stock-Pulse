@@ -164,16 +164,18 @@ class DataPipelineService:
     DEFAULT_SCHEDULER_INTERVAL = 15  # minutes
     AUTO_START_SCHEDULER = True  # Auto-start on initialization
     
-    def __init__(self, db=None, grow_extractor=None):
+    def __init__(self, db=None, grow_extractor=None, ts_store=None):
         """
         Initialize the data pipeline service
-        
+
         Args:
             db: MongoDB database instance
             grow_extractor: GrowwAPIExtractor instance
+            ts_store: TimeSeriesStore instance for PostgreSQL persistence
         """
         self.db = db
         self.grow_extractor = grow_extractor
+        self.ts_store = ts_store  # PostgreSQL time-series store
         
         # Pipeline state
         self.status = PipelineStatus.IDLE
@@ -374,7 +376,11 @@ class DataPipelineService:
                 "failed": job.failed_symbols
             })
             
-            # Store in database
+            # Persist price data to PostgreSQL time-series store
+            if self.ts_store and job.results:
+                await self._persist_to_timeseries(job.results)
+
+            # Store job record in MongoDB
             if self.db is not None:
                 try:
                     await self.db.pipeline_jobs.insert_one({**job.to_dict()})
@@ -542,6 +548,107 @@ class DataPipelineService:
             "total_symbols": len(self.DEFAULT_SYMBOLS)
         }
     
+    async def _persist_to_timeseries(self, results: Dict[str, Any]):
+        """
+        Persist extracted data to PostgreSQL time-series tables.
+
+        Extracts price, technical, fundamental, and shareholding data
+        from Groww API results and upserts them into PostgreSQL.
+        """
+        if not self.ts_store:
+            return
+
+        price_records = []
+        technical_records = []
+        fundamental_records = []
+        shareholding_records = []
+
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        for symbol, data in results.items():
+            if not isinstance(data, dict):
+                continue
+
+            # Extract price data for PostgreSQL
+            if any(k in data for k in ["close", "ltp", "current_price", "open", "high", "low"]):
+                price_records.append({
+                    "symbol": symbol,
+                    "date": data.get("date", today_str),
+                    "open": data.get("open", data.get("day_open", 0)),
+                    "high": data.get("high", data.get("day_high", 0)),
+                    "low": data.get("low", data.get("day_low", 0)),
+                    "close": data.get("close", data.get("ltp", data.get("current_price", 0))),
+                    "prev_close": data.get("prev_close", data.get("previous_close", 0)),
+                    "volume": data.get("volume", data.get("total_traded_volume", 0)),
+                    "turnover": data.get("turnover", 0),
+                })
+
+            # Extract technical data if available
+            tech_fields = ["rsi_14", "sma_20", "sma_50", "sma_200", "ema_12", "ema_26", "macd"]
+            if any(k in data for k in tech_fields):
+                technical_records.append({
+                    "symbol": symbol,
+                    "date": data.get("date", today_str),
+                    **{k: data.get(k) for k in [
+                        "sma_20", "sma_50", "sma_200", "ema_12", "ema_26",
+                        "rsi_14", "macd", "macd_signal", "bollinger_upper",
+                        "bollinger_lower", "atr_14", "adx_14", "obv",
+                        "support_level", "resistance_level"
+                    ] if k in data}
+                })
+
+            # Extract fundamental data if available
+            fund_fields = ["revenue", "net_profit", "eps", "roe", "debt_to_equity"]
+            if any(k in data for k in fund_fields):
+                fundamental_records.append({
+                    "symbol": symbol,
+                    "period_end": data.get("period_end", data.get("date", today_str)),
+                    "period_type": data.get("period_type", "quarterly"),
+                    **{k: data.get(k) for k in [
+                        "revenue", "operating_profit", "operating_margin",
+                        "net_profit", "net_profit_margin", "eps", "ebitda",
+                        "total_assets", "total_equity", "total_debt",
+                        "cash_and_equiv", "operating_cash_flow", "free_cash_flow",
+                        "roe", "debt_to_equity", "interest_coverage", "current_ratio"
+                    ] if k in data}
+                })
+
+            # Extract shareholding data if available
+            share_fields = ["promoter_holding", "fii_holding", "dii_holding"]
+            if any(k in data for k in share_fields):
+                shareholding_records.append({
+                    "symbol": symbol,
+                    "quarter_end": data.get("quarter_end", data.get("date", today_str)),
+                    **{k: data.get(k) for k in [
+                        "promoter_holding", "promoter_pledging", "fii_holding",
+                        "dii_holding", "public_holding", "promoter_holding_change",
+                        "fii_holding_change", "num_shareholders", "mf_holding",
+                        "insurance_holding"
+                    ] if k in data}
+                })
+
+        # Upsert to PostgreSQL
+        try:
+            if price_records:
+                count = await self.ts_store.upsert_prices(price_records)
+                self._log_event("pg_prices_upserted", {"count": count})
+
+            if technical_records:
+                count = await self.ts_store.upsert_technicals(technical_records)
+                self._log_event("pg_technicals_upserted", {"count": count})
+
+            if fundamental_records:
+                count = await self.ts_store.upsert_fundamentals(fundamental_records)
+                self._log_event("pg_fundamentals_upserted", {"count": count})
+
+            if shareholding_records:
+                count = await self.ts_store.upsert_shareholding(shareholding_records)
+                self._log_event("pg_shareholding_upserted", {"count": count})
+
+        except Exception as e:
+            logger.warning(f"PostgreSQL persistence error: {e}")
+            self._log_event("pg_persist_error", {"error": str(e)})
+
     def update_scheduler_config(self, interval_minutes: int = None, auto_start: bool = None) -> Dict:
         """Update scheduler configuration"""
         if interval_minutes is not None:
@@ -566,20 +673,20 @@ def get_pipeline_service() -> Optional[DataPipelineService]:
     return _pipeline_service
 
 
-def init_pipeline_service(db=None, totp_token: Optional[str] = None, secret_key: Optional[str] = None, api_key: Optional[str] = None) -> DataPipelineService:
+def init_pipeline_service(db=None, totp_token: Optional[str] = None, secret_key: Optional[str] = None, api_key: Optional[str] = None, ts_store=None) -> DataPipelineService:
     """Initialize the global pipeline service"""
     global _pipeline_service
-    
+
     from data_extraction.extractors.grow_extractor import GrowwAPIExtractor
-    
+
     grow_extractor = None
     if totp_token and secret_key:
         grow_extractor = GrowwAPIExtractor(totp_token=totp_token, secret_key=secret_key, db=db)
     elif api_key:
         # Legacy fallback - won't work for TOTP-based auth but keeps backward compatibility
         grow_extractor = GrowwAPIExtractor(totp_token=api_key, secret_key='', db=db)
-    
-    _pipeline_service = DataPipelineService(db=db, grow_extractor=grow_extractor)
-    
+
+    _pipeline_service = DataPipelineService(db=db, grow_extractor=grow_extractor, ts_store=ts_store)
+
     return _pipeline_service
 

@@ -453,35 +453,105 @@ class TimeSeriesStore:
     
     async def get_screener_data(
         self,
-        min_rsi: Optional[float] = None,
-        max_rsi: Optional[float] = None,
-        min_pe: Optional[float] = None,
-        max_pe: Optional[float] = None,
+        filters: Optional[List[Dict[str, Any]]] = None,
         symbols: Optional[List[str]] = None,
+        sort_by: str = "symbol",
+        sort_order: str = "asc",
+        limit: int = 200,
     ) -> List[Dict[str, Any]]:
         """
         Cross-join latest prices with technicals and fundamentals for screener.
         This is the key advantage of SQL — filtering across multiple data types.
+
+        Args:
+            filters: List of filter dicts with keys: metric, operator, value, value2
+                     Supported metrics map to columns:
+                       - rsi_14, sma_50, sma_200, macd -> technical_indicators
+                       - close, volume -> prices_daily
+                       - roe, debt_to_equity, eps, revenue, net_profit, current_ratio,
+                         operating_margin, net_profit_margin -> fundamentals_quarterly
+                       - promoter_holding, fii_holding, dii_holding -> shareholding_quarterly
+            symbols: Filter to specific symbols
+            sort_by: Column to sort by
+            sort_order: 'asc' or 'desc'
+            limit: Max results
         """
         conditions = []
         params: list = []
         idx = 1
-        
+
+        # Column mapping: metric name -> SQL alias.column
+        COLUMN_MAP = {
+            # Price columns (alias: p)
+            "close": "p.close", "current_price": "p.close",
+            "volume": "p.volume", "prev_close": "p.prev_close",
+            # Technical columns (alias: t)
+            "rsi_14": "t.rsi_14", "sma_50": "t.sma_50", "sma_200": "t.sma_200",
+            "macd": "t.macd", "macd_signal": "t.macd_signal",
+            "sma_20": "t.sma_20", "ema_12": "t.ema_12", "ema_26": "t.ema_26",
+            "atr_14": "t.atr_14", "adx_14": "t.adx_14",
+            "bollinger_upper": "t.bollinger_upper", "bollinger_lower": "t.bollinger_lower",
+            # Fundamental columns (alias: f)
+            "roe": "f.roe", "debt_to_equity": "f.debt_to_equity",
+            "eps": "f.eps", "revenue": "f.revenue",
+            "net_profit": "f.net_profit", "operating_margin": "f.operating_margin",
+            "net_profit_margin": "f.net_profit_margin", "current_ratio": "f.current_ratio",
+            "interest_coverage": "f.interest_coverage",
+            "free_cash_flow": "f.free_cash_flow", "operating_cash_flow": "f.operating_cash_flow",
+            # Shareholding columns (alias: s)
+            "promoter_holding": "s.promoter_holding", "fii_holding": "s.fii_holding",
+            "dii_holding": "s.dii_holding", "public_holding": "s.public_holding",
+            "promoter_pledging": "s.promoter_pledging",
+        }
+
         if symbols:
             conditions.append(f"p.symbol = ANY(${idx})")
             params.append(symbols)
             idx += 1
-        if min_rsi is not None:
-            conditions.append(f"t.rsi_14 >= ${idx}")
-            params.append(min_rsi)
-            idx += 1
-        if max_rsi is not None:
-            conditions.append(f"t.rsi_14 <= ${idx}")
-            params.append(max_rsi)
-            idx += 1
-        
+
+        # Process filters
+        if filters:
+            for f in filters:
+                metric = f.get("metric", "")
+                col = COLUMN_MAP.get(metric)
+                if not col:
+                    continue  # Skip unknown metrics
+
+                op = f.get("operator", "gte")
+                val = f.get("value", 0)
+
+                if op == "gt":
+                    conditions.append(f"{col} > ${idx}")
+                    params.append(float(val))
+                    idx += 1
+                elif op == "lt":
+                    conditions.append(f"{col} < ${idx}")
+                    params.append(float(val))
+                    idx += 1
+                elif op == "gte":
+                    conditions.append(f"{col} >= ${idx}")
+                    params.append(float(val))
+                    idx += 1
+                elif op == "lte":
+                    conditions.append(f"{col} <= ${idx}")
+                    params.append(float(val))
+                    idx += 1
+                elif op == "eq":
+                    conditions.append(f"{col} = ${idx}")
+                    params.append(float(val))
+                    idx += 1
+                elif op == "between" and f.get("value2") is not None:
+                    conditions.append(f"{col} BETWEEN ${idx} AND ${idx + 1}")
+                    params.append(float(val))
+                    params.append(float(f["value2"]))
+                    idx += 2
+
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        
+
+        # Determine sort column
+        sort_col = COLUMN_MAP.get(sort_by, "p.symbol")
+        sort_dir = "DESC" if sort_order.lower() == "desc" else "ASC"
+
         query = f"""
             WITH latest_prices AS (
                 SELECT DISTINCT ON (symbol)
@@ -491,19 +561,48 @@ class TimeSeriesStore:
             ),
             latest_tech AS (
                 SELECT DISTINCT ON (symbol)
-                    symbol, rsi_14, sma_50, sma_200, macd, macd_signal
+                    symbol, sma_20, sma_50, sma_200, ema_12, ema_26,
+                    rsi_14, macd, macd_signal, bollinger_upper, bollinger_lower,
+                    atr_14, adx_14
                 FROM technical_indicators
                 ORDER BY symbol, date DESC
+            ),
+            latest_fund AS (
+                SELECT DISTINCT ON (symbol)
+                    symbol, revenue, operating_profit, operating_margin,
+                    net_profit, net_profit_margin, eps, roe, debt_to_equity,
+                    interest_coverage, current_ratio, free_cash_flow,
+                    operating_cash_flow
+                FROM fundamentals_quarterly
+                WHERE period_type = 'quarterly'
+                ORDER BY symbol, period_end DESC
+            ),
+            latest_share AS (
+                SELECT DISTINCT ON (symbol)
+                    symbol, promoter_holding, promoter_pledging,
+                    fii_holding, dii_holding, public_holding
+                FROM shareholding_quarterly
+                ORDER BY symbol, quarter_end DESC
             )
             SELECT
                 p.symbol, p.date, p.close, p.volume, p.prev_close,
-                t.rsi_14, t.sma_50, t.sma_200, t.macd, t.macd_signal
+                t.rsi_14, t.sma_20, t.sma_50, t.sma_200,
+                t.ema_12, t.ema_26, t.macd, t.macd_signal,
+                t.bollinger_upper, t.bollinger_lower, t.atr_14, t.adx_14,
+                f.revenue, f.operating_margin, f.net_profit, f.net_profit_margin,
+                f.eps, f.roe, f.debt_to_equity, f.interest_coverage,
+                f.current_ratio, f.free_cash_flow, f.operating_cash_flow,
+                s.promoter_holding, s.promoter_pledging,
+                s.fii_holding, s.dii_holding, s.public_holding
             FROM latest_prices p
             LEFT JOIN latest_tech t ON p.symbol = t.symbol
+            LEFT JOIN latest_fund f ON p.symbol = f.symbol
+            LEFT JOIN latest_share s ON p.symbol = s.symbol
             {where}
-            ORDER BY p.symbol
+            ORDER BY {sort_col} {sort_dir} NULLS LAST
+            LIMIT {limit}
         """
-        
+
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(query, *params)
             return [dict(r) for r in rows]

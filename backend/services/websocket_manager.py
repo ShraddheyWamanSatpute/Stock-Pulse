@@ -167,23 +167,54 @@ class ConnectionManager:
 
 
 class PriceBroadcaster:
-    """Background service that fetches prices and broadcasts to clients"""
-    
+    """Background service that fetches prices and broadcasts to clients.
+
+    When Redis is available, prices are published to a Redis pub/sub channel
+    (``channel:prices``) and cached with a 10-second TTL under ``ws:price:{SYMBOL}``.
+    This enables multi-instance deployments where multiple workers share the
+    same price feed via Redis.
+    """
+
+    REDIS_CHANNEL = "channel:prices"
+    REDIS_PRICE_PREFIX = "ws:price:"
+    REDIS_PRICE_TTL = 10  # seconds
+
     def __init__(self, manager: ConnectionManager, fetch_interval: float = 5.0):
         self.manager = manager
         self.fetch_interval = fetch_interval
         self._running = False
         self._task: Optional[asyncio.Task] = None
-    
+        self._redis = None
+        self._redis_available = False
+
+    def _init_redis(self):
+        """Lazily initialise a Redis client for pub/sub."""
+        if self._redis is not None:
+            return
+        try:
+            import redis as _redis_lib
+            import os
+            url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+            self._redis = _redis_lib.Redis.from_url(
+                url, decode_responses=True, socket_connect_timeout=2, socket_timeout=1
+            )
+            self._redis.ping()
+            self._redis_available = True
+            logger.info("PriceBroadcaster: Redis pub/sub connected")
+        except Exception as e:
+            logger.debug(f"PriceBroadcaster: Redis not available ({e}), pub/sub disabled")
+            self._redis_available = False
+
     async def start(self):
         """Start the price broadcast service"""
         if self._running:
             return
-        
+
+        self._init_redis()
         self._running = True
         self._task = asyncio.create_task(self._broadcast_loop())
         logger.info(f"Price broadcaster started with {self.fetch_interval}s interval")
-    
+
     async def stop(self):
         """Stop the price broadcast service"""
         self._running = False
@@ -193,38 +224,64 @@ class PriceBroadcaster:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        if self._redis:
+            try:
+                self._redis.close()
+            except Exception:
+                pass
         logger.info("Price broadcaster stopped")
-    
+
     async def _broadcast_loop(self):
         """Main broadcast loop"""
         while self._running:
             try:
                 # Get all subscribed symbols
                 symbols = self.manager.get_subscribed_symbols()
-                
+
                 if symbols:
                     # Fetch current prices
                     prices = await self._fetch_prices(list(symbols))
-                    
+
                     if prices:
+                        # Publish to Redis pub/sub + cache
+                        self._publish_to_redis(prices)
+
+                        # Broadcast to local WebSocket clients
                         await self.manager.broadcast_prices(prices)
-                
+
                 await asyncio.sleep(self.fetch_interval)
-                
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Error in broadcast loop: {e}")
                 await asyncio.sleep(self.fetch_interval)
-    
+
+    def _publish_to_redis(self, prices: Dict[str, Dict]):
+        """Publish price updates to Redis pub/sub and cache per-symbol."""
+        if not self._redis_available:
+            return
+        try:
+            # Publish aggregated update to the prices channel
+            self._redis.publish(self.REDIS_CHANNEL, json.dumps(prices, default=str))
+
+            # Cache each symbol individually with short TTL
+            pipe = self._redis.pipeline(transaction=False)
+            for symbol, data in prices.items():
+                key = f"{self.REDIS_PRICE_PREFIX}{symbol}"
+                pipe.setex(key, self.REDIS_PRICE_TTL, json.dumps(data, default=str))
+            pipe.execute()
+        except Exception as e:
+            logger.debug(f"Redis publish error: {e}")
+
     async def _fetch_prices(self, symbols: List[str]) -> Dict[str, Dict]:
         """Fetch current prices for symbols"""
         prices = {}
-        
+
         try:
             # Try to use real market data service
             from services.market_data_service import get_bulk_quotes, is_real_data_available
-            
+
             if is_real_data_available():
                 quotes = await get_bulk_quotes(symbols)
                 for symbol, quote in quotes.items():
@@ -240,25 +297,25 @@ class PriceBroadcaster:
             else:
                 # Fallback to mock data
                 prices = self._generate_mock_prices(symbols)
-                
+
         except ImportError:
             # Market data service not available, use mock
             prices = self._generate_mock_prices(symbols)
         except Exception as e:
             logger.error(f"Error fetching prices: {e}")
             prices = self._generate_mock_prices(symbols)
-        
+
         return prices
-    
+
     def _generate_mock_prices(self, symbols: List[str]) -> Dict[str, Dict]:
         """Generate mock price data for testing"""
         import random
-        
+
         prices = {}
         for symbol in symbols:
             base_price = random.uniform(100, 5000)
             change = random.uniform(-3, 3)
-            
+
             prices[symbol] = {
                 "price": round(base_price, 2),
                 "change": round(base_price * change / 100, 2),
@@ -267,7 +324,7 @@ class PriceBroadcaster:
                 "high": round(base_price * 1.02, 2),
                 "low": round(base_price * 0.98, 2),
             }
-        
+
         return prices
 
 

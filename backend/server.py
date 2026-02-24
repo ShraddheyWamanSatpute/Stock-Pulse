@@ -439,27 +439,66 @@ async def get_llm_insight(symbol: str, request: LLMInsightRequest):
 # ==================== SCREENER ====================
 @api_router.post("/screener")
 async def screen_stocks(request: ScreenerRequest):
-    """Screen stocks based on multiple criteria"""
+    """Screen stocks based on multiple criteria.
+
+    Uses PostgreSQL cross-table JOINs when available (prices + technicals +
+    fundamentals + shareholding). Falls back to in-memory filtering over
+    cached mock data when PostgreSQL is not connected.
+    """
+    # --- Try PostgreSQL path first (fast, supports cross-table filters) ---
+    if _ts_store:
+        try:
+            # Check if screener results are cached in Redis
+            import hashlib, json as _json
+            filter_hash = hashlib.md5(
+                _json.dumps([f.model_dump() for f in request.filters], sort_keys=True, default=str).encode()
+            ).hexdigest()[:12]
+            cache_key = f"screener:{filter_hash}"
+
+            cached = cache.get(cache_key) if cache else None
+            if cached is not None:
+                return cached
+
+            filters_for_pg = [
+                {"metric": f.metric, "operator": f.operator, "value": f.value, "value2": f.value2}
+                for f in request.filters
+            ]
+            pg_results = await _ts_store.get_screener_data(
+                filters=filters_for_pg,
+                sort_by=request.sort_by,
+                sort_order=request.sort_order,
+                limit=request.limit,
+            )
+
+            if pg_results:
+                response = {"count": len(pg_results), "stocks": pg_results, "source": "postgresql"}
+                if cache:
+                    cache.set(cache_key, response, 120)  # 2 min cache
+                return response
+        except Exception as e:
+            logger.debug(f"PostgreSQL screener fallback: {e}")
+
+    # --- Fallback: in-memory filtering over mock/cached data ---
     stocks = list(get_cached_stocks().values())
     results = []
-    
+
     for stock in stocks:
         passes_all = True
         fund = stock.get("fundamentals", {})
         val = stock.get("valuation", {})
         tech = stock.get("technicals", {})
         share = stock.get("shareholding", {})
-        
+
         all_metrics = {
             **fund, **val, **tech, **share,
             "current_price": stock.get("current_price", 0),
             "price_change_percent": stock.get("price_change_percent", 0),
             "market_cap": val.get("market_cap", 0),
         }
-        
+
         for f in request.filters:
             value = all_metrics.get(f.metric, 0)
-            
+
             if f.operator == "gt" and not (value > f.value):
                 passes_all = False
             elif f.operator == "lt" and not (value < f.value):
@@ -473,22 +512,21 @@ async def screen_stocks(request: ScreenerRequest):
             elif f.operator == "between" and f.value2 is not None:
                 if not (f.value <= value <= f.value2):
                     passes_all = False
-            
+
             if not passes_all:
                 break
-        
+
         if passes_all:
-            # Add analysis
             analysis = generate_analysis(stock)
             results.append({
                 **stock,
                 "analysis": analysis
             })
-    
+
     # Sort results
     sort_key = request.sort_by
     reverse = request.sort_order == "desc"
-    
+
     def get_sort_value(s):
         if sort_key == "market_cap":
             return s.get("valuation", {}).get("market_cap", 0)
@@ -499,12 +537,13 @@ async def screen_stocks(request: ScreenerRequest):
         elif sort_key in s.get("valuation", {}):
             return s["valuation"].get(sort_key, 0)
         return s.get(sort_key, 0)
-    
+
     results.sort(key=get_sort_value, reverse=reverse)
-    
+
     return {
         "count": len(results),
-        "stocks": results[:request.limit]
+        "stocks": results[:request.limit],
+        "source": "in_memory"
     }
 
 
@@ -773,13 +812,131 @@ async def get_news_summary():
     """Get AI-generated news summary"""
     news = generate_news_items()
     summary = await summarize_news(news[:10])
-    
+
     return {
         "summary": summary,
         "news_count": len(news),
         "positive_count": len([n for n in news if n["sentiment"] == "POSITIVE"]),
         "negative_count": len([n for n in news if n["sentiment"] == "NEGATIVE"]),
         "neutral_count": len([n for n in news if n["sentiment"] == "NEUTRAL"]),
+    }
+
+
+# ==================== NEWS ARTICLES PERSISTENCE ====================
+
+class NewsArticleCreate(BaseModel):
+    title: str
+    summary: str = ""
+    source: str = ""
+    url: str = ""
+    published_date: Optional[str] = None
+    sentiment: str = "NEUTRAL"
+    sentiment_score: float = 0.0
+    related_stocks: List[str] = []
+    tags: List[str] = []
+
+
+@api_router.get("/news/articles")
+async def get_persisted_news(
+    symbol: Optional[str] = None,
+    sentiment: Optional[str] = None,
+    source: Optional[str] = None,
+    limit: int = Query(default=50, le=200)
+):
+    """Get persisted news articles from MongoDB"""
+    query = {}
+    if symbol:
+        query["related_stocks"] = symbol.upper()
+    if sentiment:
+        query["sentiment"] = sentiment.upper()
+    if source:
+        query["source"] = source
+
+    cursor = (
+        db.news_articles
+        .find(query, {"_id": 0})
+        .sort("published_date", -1)
+        .limit(limit)
+    )
+    articles = await cursor.to_list(length=limit)
+    return {"count": len(articles), "articles": articles}
+
+
+@api_router.post("/news/articles")
+async def create_news_article(article: NewsArticleCreate):
+    """Persist a news article to MongoDB"""
+    doc = article.model_dump()
+    doc["id"] = str(uuid.uuid4())
+    doc["created_at"] = datetime.now(timezone.utc).isoformat()
+    if not doc.get("published_date"):
+        doc["published_date"] = doc["created_at"]
+    doc["related_stocks"] = [s.upper() for s in doc.get("related_stocks", [])]
+
+    insert_doc = {**doc}
+    await db.news_articles.insert_one(insert_doc)
+    return {"message": "Article saved", "id": doc["id"], "article": doc}
+
+
+@api_router.post("/news/articles/bulk")
+async def bulk_create_news_articles(articles: List[NewsArticleCreate]):
+    """Persist multiple news articles at once"""
+    docs = []
+    for article in articles:
+        doc = article.model_dump()
+        doc["id"] = str(uuid.uuid4())
+        doc["created_at"] = datetime.now(timezone.utc).isoformat()
+        if not doc.get("published_date"):
+            doc["published_date"] = doc["created_at"]
+        doc["related_stocks"] = [s.upper() for s in doc.get("related_stocks", [])]
+        docs.append(doc)
+
+    if docs:
+        await db.news_articles.insert_many(docs)
+
+    return {"message": f"Saved {len(docs)} articles", "count": len(docs)}
+
+
+@api_router.get("/news/articles/{article_id}")
+async def get_news_article(article_id: str):
+    """Get a specific news article by ID"""
+    article = await db.news_articles.find_one({"id": article_id}, {"_id": 0})
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    return article
+
+
+@api_router.delete("/news/articles/{article_id}")
+async def delete_news_article(article_id: str):
+    """Delete a news article"""
+    result = await db.news_articles.delete_one({"id": article_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Article not found")
+    return {"message": "Article deleted"}
+
+
+@api_router.get("/news/articles/stats/summary")
+async def get_news_stats():
+    """Get news article statistics"""
+    total = await db.news_articles.count_documents({})
+    positive = await db.news_articles.count_documents({"sentiment": "POSITIVE"})
+    negative = await db.news_articles.count_documents({"sentiment": "NEGATIVE"})
+    neutral = await db.news_articles.count_documents({"sentiment": "NEUTRAL"})
+
+    # Get unique sources
+    pipeline = [
+        {"$group": {"_id": "$source", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}}
+    ]
+    sources = await db.news_articles.aggregate(pipeline).to_list(50)
+
+    return {
+        "total_articles": total,
+        "by_sentiment": {
+            "positive": positive,
+            "negative": negative,
+            "neutral": neutral,
+        },
+        "by_source": [{"source": s["_id"], "count": s["count"]} for s in sources if s["_id"]],
     }
 
 
@@ -1052,12 +1209,63 @@ async def run_backtest_endpoint(config: BacktestConfig):
         
         # Run the backtest
         result = await run_backtest(config, price_history)
-        
+
+        # Persist backtest result to MongoDB
+        try:
+            result_doc = result.model_dump()
+            result_doc["created_at"] = datetime.now(timezone.utc).isoformat()
+            result_doc["id"] = str(uuid.uuid4())
+            insert_doc = {**result_doc}
+            await db.backtest_results.insert_one(insert_doc)
+        except Exception as save_err:
+            logger.warning(f"Could not save backtest result: {save_err}")
+
         return result.model_dump()
-    
+
     except Exception as e:
         logger.error(f"Backtest error: {e}")
         raise HTTPException(status_code=500, detail=f"Backtest failed: {str(e)}")
+
+
+@api_router.get("/backtest/history")
+async def get_backtest_history(
+    symbol: Optional[str] = None,
+    strategy: Optional[str] = None,
+    limit: int = Query(default=20, le=100)
+):
+    """Get saved backtest results history"""
+    query = {}
+    if symbol:
+        query["symbol"] = symbol.upper()
+    if strategy:
+        query["strategy"] = strategy
+
+    cursor = (
+        db.backtest_results
+        .find(query, {"_id": 0})
+        .sort("created_at", -1)
+        .limit(limit)
+    )
+    results = await cursor.to_list(length=limit)
+    return {"count": len(results), "results": results}
+
+
+@api_router.get("/backtest/history/{result_id}")
+async def get_backtest_result(result_id: str):
+    """Get a specific backtest result by ID"""
+    result = await db.backtest_results.find_one({"id": result_id}, {"_id": 0})
+    if not result:
+        raise HTTPException(status_code=404, detail="Backtest result not found")
+    return result
+
+
+@api_router.delete("/backtest/history/{result_id}")
+async def delete_backtest_result(result_id: str):
+    """Delete a specific backtest result"""
+    result = await db.backtest_results.delete_one({"id": result_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Backtest result not found")
+    return {"message": "Backtest result deleted"}
 
 
 # ==================== ALERTS ====================
@@ -1967,6 +2175,66 @@ async def websocket_with_id(websocket: WebSocket, client_id: str):
         connection_manager.disconnect(client_id)
 
 
+# ==================== DATABASE INDEX SETUP ====================
+async def _ensure_mongodb_indexes(database):
+    """Create MongoDB indexes at startup for all collections.
+
+    Indexes are idempotent — calling create_index on an existing index is a no-op.
+    This ensures performance regardless of whether setup_databases.py was run first.
+    """
+    try:
+        # Watchlist
+        await database.watchlist.create_index("symbol", unique=True)
+
+        # Portfolio
+        await database.portfolio.create_index("symbol", unique=True)
+
+        # Alerts
+        await database.alerts.create_index("id", unique=True)
+        await database.alerts.create_index("symbol")
+        await database.alerts.create_index("status")
+
+        # Stock data (from extraction pipeline)
+        await database.stock_data.create_index("symbol", unique=True)
+        await database.stock_data.create_index("last_updated")
+        await database.stock_data.create_index("stock_master.sector")
+        await database.stock_data.create_index("stock_master.market_cap_category")
+
+        # Price history (MongoDB-side, complements PostgreSQL)
+        await database.price_history.create_index(
+            [("symbol", 1), ("date", -1)], unique=True
+        )
+
+        # Extraction log
+        await database.extraction_log.create_index(
+            [("symbol", 1), ("source", 1), ("started_at", -1)]
+        )
+
+        # Quality reports
+        await database.quality_reports.create_index(
+            [("symbol", 1), ("generated_at", -1)]
+        )
+
+        # Pipeline jobs
+        await database.pipeline_jobs.create_index("job_id", unique=True)
+        await database.pipeline_jobs.create_index([("created_at", -1)])
+
+        # News articles
+        await database.news_articles.create_index([("published_date", -1)])
+        await database.news_articles.create_index("related_stocks")
+        await database.news_articles.create_index("sentiment")
+
+        # Backtest results
+        await database.backtest_results.create_index(
+            [("symbol", 1), ("strategy", 1), ("created_at", -1)]
+        )
+        await database.backtest_results.create_index([("created_at", -1)])
+
+        logger.info("MongoDB indexes created/verified for all collections")
+    except Exception as e:
+        logger.warning(f"MongoDB index creation issue: {e}")
+
+
 # ==================== LIFECYCLE EVENTS ====================
 @app.on_event("startup")
 async def startup_event():
@@ -1974,30 +2242,42 @@ async def startup_event():
     global _data_pipeline_service, _ts_store
     
     logger.info("Starting StockPulse API...")
-    
+
     # Log cache status
     if cache and cache.is_redis_available:
         logger.info("Redis cache is active")
     else:
         logger.warning("Redis not available, using in-memory cache fallback")
-    
+
     # Initialize PostgreSQL time-series store
     try:
         _ts_store = await init_timeseries_store(timeseries_dsn)
         logger.info("PostgreSQL time-series store initialized")
     except Exception as e:
         logger.warning(f"Time-series store not available: {e}")
+
+    # Ensure MongoDB indexes exist
+    try:
+        await _ensure_mongodb_indexes(db)
+        logger.info("MongoDB indexes verified")
+    except Exception as e:
+        logger.warning(f"MongoDB index creation warning: {e}")
     
     if WEBSOCKET_AVAILABLE:
         await price_broadcaster.start()
         logger.info("Price broadcaster started")
     
-    # Initialize Data Pipeline Service
+    # Initialize Data Pipeline Service (with PostgreSQL bridge)
     if PIPELINE_SERVICE_AVAILABLE:
         try:
-            _data_pipeline_service = init_pipeline_service(db=db, totp_token=GROW_TOTP_TOKEN, secret_key=GROW_SECRET_KEY)
+            _data_pipeline_service = init_pipeline_service(
+                db=db,
+                totp_token=GROW_TOTP_TOKEN,
+                secret_key=GROW_SECRET_KEY,
+                ts_store=_ts_store,
+            )
             await _data_pipeline_service.initialize()
-            logger.info("Data pipeline service initialized with Groww API")
+            logger.info("Data pipeline service initialized with Groww API + PostgreSQL bridge")
         except Exception as e:
             logger.error(f"Failed to initialize data pipeline service: {e}")
     else:
