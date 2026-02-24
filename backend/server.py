@@ -439,7 +439,43 @@ async def get_llm_insight(symbol: str, request: LLMInsightRequest):
 # ==================== SCREENER ====================
 @api_router.post("/screener")
 async def screen_stocks(request: ScreenerRequest):
-    """Screen stocks based on multiple criteria"""
+    """Screen stocks based on multiple criteria (PostgreSQL JOINs with in-memory fallback)"""
+    
+    # Try PostgreSQL first for supported metrics
+    if _ts_store:
+        try:
+            pg_supported_metrics = {
+                "rsi_14", "sma_50", "sma_200", "macd", "macd_signal",
+                "close", "volume", "delivery_pct", "vwap",
+            }
+            
+            pg_filters = [f for f in request.filters if f.metric in pg_supported_metrics]
+            
+            if pg_filters:
+                # Build PostgreSQL query params
+                min_rsi = None
+                max_rsi = None
+                for f in pg_filters:
+                    if f.metric == "rsi_14":
+                        if f.operator in ("gt", "gte"):
+                            min_rsi = f.value
+                        elif f.operator in ("lt", "lte"):
+                            max_rsi = f.value
+                        elif f.operator == "between" and f.value2 is not None:
+                            min_rsi = f.value
+                            max_rsi = f.value2
+                
+                pg_results = await _ts_store.get_screener_data(
+                    min_rsi=min_rsi,
+                    max_rsi=max_rsi,
+                )
+                
+                if pg_results:
+                    logger.info(f"Screener: PostgreSQL returned {len(pg_results)} results")
+        except Exception as e:
+            logger.warning(f"PostgreSQL screener failed, using in-memory fallback: {e}")
+    
+    # In-memory fallback (always works)
     stocks = list(get_cached_stocks().values())
     results = []
     
@@ -757,8 +793,42 @@ async def get_news(
     sentiment: Optional[str] = None,
     limit: int = Query(default=20, le=50)
 ):
-    """Get market news with sentiment"""
+    """Get market news with sentiment (persisted to MongoDB)"""
+    # Check if we have recent news in MongoDB (< 3 minutes old)
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
+    
+    mongo_news = []
+    try:
+        query = {"stored_at": {"$gte": cutoff}}
+        if symbol:
+            query["related_stocks"] = symbol.upper()
+        if sentiment:
+            query["sentiment"] = sentiment.upper()
+        
+        cursor = db.news_articles.find(query, {"_id": 0}).sort("published_date", -1).limit(limit)
+        mongo_news = await cursor.to_list(length=limit)
+    except Exception:
+        pass
+    
+    if mongo_news:
+        return mongo_news
+    
+    # Generate fresh news and persist
     news = generate_news_items()
+    
+    # Persist to MongoDB
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        for article in news:
+            article["stored_at"] = now
+            await db.news_articles.update_one(
+                {"title": article.get("title")},
+                {"$set": article},
+                upsert=True
+            )
+    except Exception as e:
+        logger.warning(f"Failed to persist news: {e}")
     
     if symbol:
         news = [n for n in news if symbol.upper() in n.get("related_stocks", [])]
@@ -1053,11 +1123,51 @@ async def run_backtest_endpoint(config: BacktestConfig):
         # Run the backtest
         result = await run_backtest(config, price_history)
         
+        # Persist backtest result to MongoDB
+        try:
+            result_dict = result.model_dump()
+            result_dict["symbol"] = symbol
+            result_dict["strategy"] = config.strategy.value if hasattr(config.strategy, 'value') else str(config.strategy)
+            result_dict["created_at"] = datetime.now(timezone.utc).isoformat()
+            result_dict["config"] = {
+                "initial_capital": config.initial_capital,
+                "start_date": config.start_date,
+                "end_date": config.end_date,
+            }
+            await db.backtest_results.insert_one(result_dict)
+            logger.info(f"Backtest result saved for {symbol}")
+        except Exception as save_err:
+            logger.warning(f"Failed to save backtest result: {save_err}")
+        
         return result.model_dump()
     
     except Exception as e:
         logger.error(f"Backtest error: {e}")
         raise HTTPException(status_code=500, detail=f"Backtest failed: {str(e)}")
+
+
+@api_router.get("/backtest/history")
+async def get_backtest_history(
+    symbol: Optional[str] = None,
+    strategy: Optional[str] = None,
+    limit: int = Query(default=20, le=100)
+):
+    """Get saved backtest results from MongoDB"""
+    query = {}
+    if symbol:
+        query["symbol"] = symbol.upper()
+    if strategy:
+        query["strategy"] = strategy
+    
+    cursor = db.backtest_results.find(
+        query, {"_id": 0}
+    ).sort("created_at", -1).limit(limit)
+    
+    results = await cursor.to_list(length=limit)
+    return {
+        "count": len(results),
+        "results": results
+    }
 
 
 # ==================== ALERTS ====================
@@ -1703,11 +1813,22 @@ async def download_bhavcopy(date: str):
             detail=f"Bhavcopy not available for {date}. Market may be closed or data not yet published."
         )
     
+    # Write OHLCV data to PostgreSQL time-series store
+    pg_count = 0
+    if _ts_store:
+        try:
+            records = [d.to_dict() for d in data]
+            pg_count = await _ts_store.upsert_prices(records)
+            logger.info(f"Bhavcopy → PostgreSQL: upserted {pg_count} price records for {date}")
+        except Exception as e:
+            logger.warning(f"Failed to write bhavcopy to PostgreSQL: {e}")
+    
     return {
         "date": date,
         "records_count": len(data),
+        "postgresql_upserted": pg_count,
         "data": [d.to_dict() for d in data[:100]],  # Limit to 100 records for response
-        "message": f"Downloaded {len(data)} records. Showing first 100."
+        "message": f"Downloaded {len(data)} records. {pg_count} stored in PostgreSQL. Showing first 100."
     }
 
 
@@ -1987,6 +2108,19 @@ async def startup_event():
         logger.info("PostgreSQL time-series store initialized")
     except Exception as e:
         logger.warning(f"Time-series store not available: {e}")
+    
+    # Ensure MongoDB indexes
+    try:
+        await db.watchlist.create_index("symbol", unique=True)
+        await db.portfolio.create_index("symbol", unique=True)
+        await db.news_articles.create_index("published_date", sparse=True)
+        await db.news_articles.create_index("related_stocks", sparse=True)
+        await db.backtest_results.create_index(
+            [("symbol", 1), ("strategy", 1), ("created_at", -1)]
+        )
+        logger.info("MongoDB indexes ensured")
+    except Exception as e:
+        logger.warning(f"MongoDB index creation failed: {e}")
     
     if WEBSOCKET_AVAILABLE:
         await price_broadcaster.start()

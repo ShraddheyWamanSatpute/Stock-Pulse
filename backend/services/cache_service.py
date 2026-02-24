@@ -247,6 +247,135 @@ class CacheService:
                 self._redis.close()
             except Exception:
                 pass
+    
+    # ========================
+    # HASH — per-field stock data
+    # ========================
+    
+    def set_stock_hash(self, symbol: str, fields: Dict[str, Any]) -> bool:
+        """Store individual stock fields as a Redis HASH (enables partial reads)."""
+        try:
+            if self._redis_available:
+                key = f"stock:{symbol}"
+                # Convert all values to strings for Redis HASH
+                str_fields = {k: json.dumps(v, default=str) for k, v in fields.items()}
+                self._redis.hset(key, mapping=str_fields)
+                self._redis.expire(key, PRICE_CACHE_TTL)
+                self._stats["sets"] += 1
+                return True
+            return False
+        except Exception as e:
+            self._stats["errors"] += 1
+            logger.debug(f"HASH set error for {symbol}: {e}")
+            return False
+    
+    def get_stock_field(self, symbol: str, field: str) -> Optional[Any]:
+        """Get a single field from a stock's HASH (e.g., just the price)."""
+        try:
+            if self._redis_available:
+                data = self._redis.hget(f"stock:{symbol}", field)
+                if data:
+                    self._stats["hits"] += 1
+                    return json.loads(data)
+                self._stats["misses"] += 1
+            return None
+        except Exception as e:
+            self._stats["errors"] += 1
+            return None
+    
+    def get_stock_fields(self, symbol: str, fields: List[str]) -> Dict[str, Any]:
+        """Get multiple fields from a stock's HASH."""
+        try:
+            if self._redis_available:
+                values = self._redis.hmget(f"stock:{symbol}", fields)
+                result = {}
+                for f, v in zip(fields, values):
+                    if v is not None:
+                        result[f] = json.loads(v)
+                if result:
+                    self._stats["hits"] += 1
+                else:
+                    self._stats["misses"] += 1
+                return result
+            return {}
+        except Exception:
+            return {}
+    
+    # ========================
+    # SORTED SET — top movers
+    # ========================
+    
+    def update_top_movers(self, gainers: Dict[str, float], losers: Dict[str, float]) -> bool:
+        """
+        Update top gainers and losers using Redis SORTED SETs.
+        
+        Args:
+            gainers: Dict of {symbol: price_change_percent} for gainers
+            losers: Dict of {symbol: price_change_percent} for losers
+        """
+        try:
+            if self._redis_available:
+                if gainers:
+                    self._redis.zadd("top_gainers", gainers)
+                    self._redis.expire("top_gainers", PRICE_CACHE_TTL)
+                if losers:
+                    # Store as positive values, sorted ascending → worst first
+                    self._redis.zadd("top_losers", {k: abs(v) for k, v in losers.items()})
+                    self._redis.expire("top_losers", PRICE_CACHE_TTL)
+                return True
+            return False
+        except Exception as e:
+            logger.debug(f"ZSET update error: {e}")
+            return False
+    
+    def get_top_gainers(self, count: int = 10) -> List[Dict[str, Any]]:
+        """Get top N gainers from SORTED SET (highest change % first)."""
+        try:
+            if self._redis_available:
+                results = self._redis.zrevrange("top_gainers", 0, count - 1, withscores=True)
+                return [{"symbol": sym, "change_pct": score} for sym, score in results]
+            return []
+        except Exception:
+            return []
+    
+    def get_top_losers(self, count: int = 10) -> List[Dict[str, Any]]:
+        """Get top N losers from SORTED SET (biggest loss first)."""
+        try:
+            if self._redis_available:
+                results = self._redis.zrevrange("top_losers", 0, count - 1, withscores=True)
+                return [{"symbol": sym, "change_pct": -score} for sym, score in results]
+            return []
+        except Exception:
+            return []
+    
+    # ========================
+    # PUB/SUB — real-time prices
+    # ========================
+    
+    def publish_price(self, symbol: str, price_data: Dict) -> bool:
+        """Publish a price update to the Redis PUB/SUB channel."""
+        try:
+            if self._redis_available:
+                channel = f"channel:prices"
+                payload = json.dumps({"symbol": symbol, **price_data}, default=str)
+                self._redis.publish(channel, payload)
+                return True
+            return False
+        except Exception as e:
+            logger.debug(f"PUB/SUB publish error: {e}")
+            return False
+    
+    def publish_alert(self, alert_data: Dict) -> bool:
+        """Push an alert notification to the Redis alert queue (LIST)."""
+        try:
+            if self._redis_available:
+                payload = json.dumps(alert_data, default=str)
+                self._redis.rpush("alert_queue", payload)
+                return True
+            return False
+        except Exception as e:
+            logger.debug(f"Alert queue push error: {e}")
+            return False
 
 
 # Module-level singleton
