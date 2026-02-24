@@ -635,32 +635,41 @@ External APIs (Yahoo, Groww, NSE, Screener.in)
 
 ---
 
-## Migration Steps (What to Build)
+## Migration Steps — Implementation Status
 
-### Phase 1: Formalize Existing Setup
-- Add missing MongoDB indexes (currently no explicit index creation in server startup)
-- Create a `setup_databases.py` script that creates PostgreSQL tables with the schema above
-- Add `.env` entries for `REDIS_URL` and `TIMESERIES_DSN` (already present in code)
+### Phase 1: Formalize Existing Setup -- COMPLETED
+- [x] MongoDB indexes added to `server.py` startup via `_ensure_mongodb_indexes()` — all 10 collections indexed
+- [x] Created `setup_databases.py` script — initializes PostgreSQL tables, MongoDB collections + indexes, Redis check, filesystem dirs
+- [x] `.env.example` updated with `REDIS_URL`, `TIMESERIES_DSN`, `GROW_TOTP_TOKEN`, `GROW_SECRET_KEY`, filesystem paths
 
-### Phase 2: Wire PostgreSQL into Pipeline
-- After Bhavcopy download -> call `_ts_store.upsert_prices(records)`
-- After technical calculation -> call `_ts_store.upsert_technicals(records)`
-- After Screener.in extraction -> call `_ts_store.upsert_fundamentals(records)`
-- Shareholding data -> call `_ts_store.upsert_shareholding(records)`
+### Phase 2: Wire PostgreSQL into Pipeline -- COMPLETED
+- [x] `DataPipelineService` now accepts `ts_store` parameter
+- [x] `_persist_to_timeseries()` method extracts price/technical/fundamental/shareholding data from Groww API results and upserts into PostgreSQL
+- [x] `server.py` startup passes `_ts_store` to `init_pipeline_service()`
+- [x] Data flows: Extraction -> MongoDB (entity store) + PostgreSQL (time-series)
 
-### Phase 3: Add New Collections
-- Create `news_articles` collection in MongoDB for persisted news
-- Create `backtest_results` collection for saved backtests
+### Phase 3: Add New Collections -- COMPLETED
+- [x] `news_articles` collection — full CRUD endpoints: `GET/POST /api/news/articles`, bulk insert, single article GET/DELETE, stats/summary
+- [x] `backtest_results` collection — auto-persist on `/api/backtest/run`, history endpoint `GET /api/backtest/history`, single result GET/DELETE
+- [x] MongoDB indexes created at startup for both collections
 
-### Phase 4: Optimize Screener to Use PostgreSQL
-- Modify the `/api/screener` endpoint to query PostgreSQL (cross-table JOIN) instead of filtering in-memory Python loops
-- Fall back to the current in-memory approach when PostgreSQL is unavailable
+### Phase 4: Optimize Screener to Use PostgreSQL -- COMPLETED
+- [x] `TimeSeriesStore.get_screener_data()` enhanced with full 4-table JOIN (prices + technicals + fundamentals + shareholding)
+- [x] Supports all filter operators: gt, lt, gte, lte, eq, between
+- [x] Supports 30+ filterable metrics across all 4 tables
+- [x] `/api/screener` endpoint tries PostgreSQL first with Redis caching (2 min TTL), falls back to in-memory filtering
+- [x] Response includes `source` field indicating which path was used
 
-### Phase 5: TimescaleDB (When Scale Demands)
-- Install TimescaleDB extension
-- Convert `prices_daily` to hypertable
-- Enable compression for data older than 30 days
-- Add continuous aggregates for weekly/monthly OHLCV rollups
+### Phase 4.5: Redis Pub/Sub for WebSocket -- COMPLETED
+- [x] `PriceBroadcaster` now publishes to Redis `channel:prices` via pub/sub
+- [x] Per-symbol price cache: `ws:price:{SYMBOL}` with 10s TTL
+- [x] Graceful degradation if Redis unavailable
+
+### Phase 5: TimescaleDB (Future — When Scale Demands)
+- [ ] Install TimescaleDB extension
+- [ ] Convert `prices_daily` to hypertable
+- [ ] Enable compression for data older than 30 days
+- [ ] Add continuous aggregates for weekly/monthly OHLCV rollups
 
 ---
 
