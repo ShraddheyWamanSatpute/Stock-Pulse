@@ -15,18 +15,7 @@ Usage:
     python setup_databases.py --check      # Verify all connections without creating
 """
 
-import asyncio
 import argparse
-Creates and verifies all database schemas:
-- PostgreSQL: 4 time-series tables with indexes
-- MongoDB: Indexes for 9 collections
-
-Usage:
-    python setup_databases.py
-    python setup_databases.py --pg-only
-    python setup_databases.py --mongo-only
-"""
-
 import asyncio
 import logging
 import os
@@ -37,10 +26,6 @@ from dotenv import load_dotenv
 # Load environment
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
-
-# Load .env
-from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent / '.env')
 
 logging.basicConfig(
     level=logging.INFO,
@@ -280,9 +265,10 @@ CREATE INDEX IF NOT EXISTS idx_share_symbol ON shareholding_quarterly (symbol, q
 """
 
 
-async def setup_postgresql():
+async def setup_postgresql(dsn: str = None, check_only: bool = False):
     """Create PostgreSQL tables and indexes."""
-    dsn = os.environ.get('TIMESERIES_DSN', 'postgresql://localhost:5432/stockpulse_ts')
+    if dsn is None:
+        dsn = os.environ.get('TIMESERIES_DSN', 'postgresql://localhost:5432/stockpulse_ts')
     
     try:
         import asyncpg
@@ -431,6 +417,118 @@ async def setup_mongodb(mongo_url: str, db_name: str, check_only: bool = False):
         # Execute schema
         await conn.execute(POSTGRESQL_SCHEMA)
         
+        # Check for TimescaleDB extension and apply optimizations if available
+        timescaledb_available = False
+        try:
+            # Try to create extension if it doesn't exist
+            await conn.execute("CREATE EXTENSION IF NOT EXISTS timescaledb;")
+            timescaledb_available = True
+            logger.info("⚡ TimescaleDB extension detected and enabled")
+        except asyncpg.exceptions.InsufficientPrivilegeError:
+            logger.warning("Not enough privileges to create timescaledb extension")
+        except asyncpg.exceptions.UndefinedFileError:
+            logger.info("TimescaleDB not installed on host. Proceeding with standard PostgreSQL.")
+        except Exception as e:
+            logger.warning(f"Could not enable TimescaleDB: {e}")
+            
+        if timescaledb_available:
+            logger.info("Applying TimescaleDB optimizations (Hypertables, Compression, Continuous Aggregates)...")
+            try:
+                # 1. Convert to Hypertables (if not already)
+                hypertable_check = await conn.fetchval(
+                    "SELECT count(*) FROM _timescaledb_catalog.hypertable WHERE table_name = 'prices_daily';"
+                )
+                
+                if hypertable_check == 0:
+                    logger.info("  -> Converting prices_daily to hypertable")
+                    await conn.execute(
+                        "SELECT create_hypertable('prices_daily', by_range('date', INTERVAL '1 month'), if_not_exists => TRUE);"
+                    )
+                    logger.info("  -> Converting technical_indicators to hypertable")
+                    await conn.execute(
+                        "SELECT create_hypertable('technical_indicators', by_range('date', INTERVAL '1 month'), if_not_exists => TRUE);"
+                    )
+                    
+                    # 2. Setup Compression Policies
+                    logger.info("  -> Setting up compression policies (data > 6 months)")
+                    await conn.execute("""
+                        ALTER TABLE prices_daily SET (
+                            timescaledb.compress,
+                            timescaledb.compress_segmentby = 'symbol',
+                            timescaledb.compress_orderby = 'date DESC'
+                        );
+                    """)
+                    await conn.execute("""
+                        ALTER TABLE technical_indicators SET (
+                            timescaledb.compress,
+                            timescaledb.compress_segmentby = 'symbol',
+                            timescaledb.compress_orderby = 'date DESC'
+                        );
+                    """)
+                    
+                    try:
+                        await conn.execute("SELECT add_compression_policy('prices_daily', INTERVAL '6 months');")
+                        await conn.execute("SELECT add_compression_policy('technical_indicators', INTERVAL '6 months');")
+                    except Exception as e:
+                        if "already exists" not in str(e):
+                            raise
+                    
+                    # 3. Setup Continuous Aggregates (Weekly and Monthly)
+                    logger.info("  -> Creating continuous aggregates for weekly/monthly OHLCV")
+                    await conn.execute("""
+                        CREATE MATERIALIZED VIEW IF NOT EXISTS prices_weekly
+                        WITH (timescaledb.continuous) AS
+                        SELECT
+                            symbol,
+                            time_bucket('1 week', date) AS week,
+                            first(open, date) AS open,
+                            max(high) AS high,
+                            min(low) AS low,
+                            last(close, date) AS close,
+                            sum(volume) AS volume
+                        FROM prices_daily
+                        GROUP BY symbol, week;
+                    """)
+                    
+                    await conn.execute("""
+                        CREATE MATERIALIZED VIEW IF NOT EXISTS prices_monthly
+                        WITH (timescaledb.continuous) AS
+                        SELECT
+                            symbol,
+                            time_bucket('1 month', date) AS month,
+                            first(open, date) AS open,
+                            max(high) AS high,
+                            min(low) AS low,
+                            last(close, date) AS close,
+                            sum(volume) AS volume
+                        FROM prices_daily
+                        GROUP BY symbol, month;
+                    """)
+                    
+                    try:
+                        await conn.execute("""
+                            SELECT add_continuous_aggregate_policy('prices_weekly',
+                                start_offset => INTERVAL '1 month',
+                                end_offset => INTERVAL '1 day',
+                                schedule_interval => INTERVAL '1 day');
+                        """)
+                    except Exception as e:
+                        if "already exists" not in str(e):
+                            logger.warning(f"Failed to add weekly refresh policy: {e}")
+                            
+                    try:
+                        await conn.execute("""
+                            SELECT add_continuous_aggregate_policy('prices_monthly',
+                                start_offset => INTERVAL '6 months',
+                                end_offset => INTERVAL '1 day',
+                                schedule_interval => INTERVAL '1 week');
+                        """)
+                    except Exception as e:
+                        if "already exists" not in str(e):
+                            logger.warning(f"Failed to add monthly refresh policy: {e}")
+            except Exception as e:
+                logger.error(f"Error applying TimescaleDB optimizations: {e}")
+        
         # Verify tables
         tables = await conn.fetch(
             """SELECT table_name, 
@@ -468,10 +566,12 @@ async def setup_mongodb(mongo_url: str, db_name: str, check_only: bool = False):
         return False
 
 
-async def setup_mongodb():
+async def setup_mongodb(mongo_url: str = None, db_name: str = None, check_only: bool = False):
     """Create MongoDB indexes for all collections."""
-    mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
-    db_name = os.environ.get('MONGO_DB_NAME', os.environ.get('DB_NAME', 'stockpulse'))
+    if mongo_url is None:
+        mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
+    if db_name is None:
+        db_name = os.environ.get('MONGO_DB_NAME', os.environ.get('DB_NAME', 'stockpulse'))
     
     try:
         from motor.motor_asyncio import AsyncIOMotorClient
@@ -661,145 +761,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
-    try:
-        client = AsyncIOMotorClient(mongo_url)
-        db = client[db_name]
-        
-        # Ping to verify connection
-        await client.admin.command('ping')
-        logger.info(f"Connected to MongoDB: {mongo_url}/{db_name}")
-        
-        # ---- watchlist ----
-        await db.watchlist.create_index("symbol", unique=True)
-        logger.info("  ✅ watchlist: index on symbol (unique)")
-        
-        # ---- portfolio ----
-        await db.portfolio.create_index("symbol", unique=True)
-        logger.info("  ✅ portfolio: index on symbol (unique)")
-        
-        # ---- alerts ----
-        await db.alerts.create_index("id", unique=True)
-        await db.alerts.create_index("symbol")
-        await db.alerts.create_index("status")
-        logger.info("  ✅ alerts: indexes on id (unique), symbol, status")
-        
-        # ---- stock_data ----
-        await db.stock_data.create_index("symbol", unique=True)
-        await db.stock_data.create_index("last_updated", sparse=True)
-        await db.stock_data.create_index("stock_master.sector", sparse=True)
-        await db.stock_data.create_index("stock_master.market_cap_category", sparse=True)
-        logger.info("  ✅ stock_data: indexes on symbol (unique), last_updated, sector, cap_category")
-        
-        # ---- price_history (MongoDB legacy — will migrate to PostgreSQL) ----
-        await db.price_history.create_index(
-            [("symbol", 1), ("date", -1)], unique=True
-        )
-        logger.info("  ✅ price_history: compound index on (symbol, date)")
-        
-        # ---- extraction_log ----
-        await db.extraction_log.create_index(
-            [("symbol", 1), ("source", 1), ("started_at", -1)]
-        )
-        logger.info("  ✅ extraction_log: compound index on (symbol, source, started_at)")
-        
-        # ---- quality_reports ----
-        await db.quality_reports.create_index(
-            [("symbol", 1), ("generated_at", -1)]
-        )
-        logger.info("  ✅ quality_reports: compound index on (symbol, generated_at)")
-        
-        # ---- pipeline_jobs ----
-        await db.pipeline_jobs.create_index("job_id", unique=True)
-        await db.pipeline_jobs.create_index("created_at", sparse=True)
-        logger.info("  ✅ pipeline_jobs: indexes on job_id (unique), created_at")
-        
-        # ---- news_articles (NEW) ----
-        await db.news_articles.create_index("published_date", sparse=True)
-        await db.news_articles.create_index("related_stocks", sparse=True)
-        await db.news_articles.create_index("sentiment", sparse=True)
-        logger.info("  ✅ news_articles: indexes on published_date, related_stocks, sentiment")
-        
-        # ---- backtest_results (NEW) ----
-        await db.backtest_results.create_index(
-            [("symbol", 1), ("strategy", 1), ("created_at", -1)]
-        )
-        logger.info("  ✅ backtest_results: compound index on (symbol, strategy, created_at)")
-        
-        # List all collections
-        collections = await db.list_collection_names()
-        logger.info(f"MongoDB collections: {sorted(collections)}")
-        
-        client.close()
-        logger.info("✅ MongoDB setup complete")
-        return True
-    except Exception as e:
-        logger.error(f"❌ MongoDB setup failed: {e}")
-        return False
-
-
-def setup_filesystem():
-    """Create organized directory structure."""
-    base = Path(__file__).parent
-    dirs = [
-        base / "reports",
-        base / "data" / "bhavcopy",
-        base / "models",
-        base / "cache" / "html",
-        base / "backups",
-    ]
-    
-    for d in dirs:
-        d.mkdir(parents=True, exist_ok=True)
-        logger.info(f"  📁 {d.relative_to(base)}/")
-    
-    # Add .gitkeep to empty dirs so they're tracked by git
-    for d in dirs:
-        gitkeep = d / ".gitkeep"
-        if not gitkeep.exists():
-            gitkeep.touch()
-    
-    logger.info("✅ Filesystem directories created")
-    return True
-
-
-async def main():
-    """Run all database setup steps."""
-    mode = sys.argv[1] if len(sys.argv) > 1 else "--all"
-    
-    results = {}
-    
-    logger.info("=" * 60)
-    logger.info("StockPulse Database Setup")
-    logger.info("=" * 60)
-    
-    if mode in ("--all", "--pg-only"):
-        logger.info("\n📊 Setting up PostgreSQL...")
-        results["postgresql"] = await setup_postgresql()
-    
-    if mode in ("--all", "--mongo-only"):
-        logger.info("\n📦 Setting up MongoDB...")
-        results["mongodb"] = await setup_mongodb()
-    
-    if mode in ("--all", "--fs-only"):
-        logger.info("\n📁 Setting up Filesystem...")
-        results["filesystem"] = setup_filesystem()
-    
-    # Summary
-    logger.info("\n" + "=" * 60)
-    logger.info("Setup Summary:")
-    for name, success in results.items():
-        status = "✅ SUCCESS" if success else "❌ FAILED"
-        logger.info(f"  {name}: {status}")
-    logger.info("=" * 60)
-    
-    if all(results.values()):
-        logger.info("All database setup completed successfully! 🎉")
-        return 0
-    else:
-        logger.error("Some setup steps failed. Check logs above.")
-        return 1
-
-
-if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
