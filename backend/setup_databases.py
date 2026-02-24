@@ -16,8 +16,8 @@ Usage:
     python setup_databases.py --check      # Verify all connections (read-only)
 """
 
-import asyncio
 import argparse
+import asyncio
 import logging
 import os
 import sys
@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 # Load .env from the same directory as this script
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
+load_dotenv(ROOT_DIR / '.env')
 
 logging.basicConfig(
     level=logging.INFO,
@@ -208,6 +209,11 @@ async def setup_postgresql(check_only: bool = False) -> bool:
     """Create PostgreSQL tables and indexes, or just verify they exist."""
     dsn = os.environ.get("TIMESERIES_DSN", "postgresql://localhost:5432/stockpulse_ts")
 
+async def setup_postgresql(dsn: str = None, check_only: bool = False):
+    """Create PostgreSQL tables and indexes."""
+    if dsn is None:
+        dsn = os.environ.get('TIMESERIES_DSN', 'postgresql://localhost:5432/stockpulse_ts')
+    
     try:
         import asyncpg
     except ImportError:
@@ -254,6 +260,216 @@ async def setup_postgresql(check_only: bool = False) -> bool:
         tables = await conn.fetch(
             """SELECT table_name,
                       (SELECT COUNT(*) FROM information_schema.columns c
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+        )
+        table_names = [t["table_name"] for t in tables]
+        logger.info(f"PostgreSQL setup complete. Tables: {table_names}")
+
+        await conn.close()
+        return True
+
+    except Exception as e:
+        logger.error(f"PostgreSQL setup failed: {e}")
+        return False
+
+
+# ================================================================
+# MongoDB Setup
+# ================================================================
+
+MONGO_COLLECTIONS = {
+    "watchlist": {
+        "indexes": [
+            {"keys": [("symbol", 1)], "unique": True},
+        ]
+    },
+    "portfolio": {
+        "indexes": [
+            {"keys": [("symbol", 1)], "unique": True},
+        ]
+    },
+    "alerts": {
+        "indexes": [
+            {"keys": [("id", 1)], "unique": True},
+            {"keys": [("symbol", 1)]},
+            {"keys": [("status", 1)]},
+            {"keys": [("status", 1), ("symbol", 1)]},
+        ]
+    },
+    "stock_data": {
+        "indexes": [
+            {"keys": [("symbol", 1)], "unique": True},
+            {"keys": [("last_updated", -1)]},
+            {"keys": [("stock_master.sector", 1)]},
+            {"keys": [("stock_master.market_cap_category", 1)]},
+        ]
+    },
+    "price_history": {
+        "indexes": [
+            {"keys": [("symbol", 1), ("date", -1)], "unique": True},
+        ]
+    },
+    "extraction_log": {
+        "indexes": [
+            {"keys": [("symbol", 1), ("source", 1), ("started_at", -1)]},
+            {"keys": [("status", 1)]},
+        ]
+    },
+    "quality_reports": {
+        "indexes": [
+            {"keys": [("symbol", 1), ("generated_at", -1)]},
+        ]
+    },
+    "pipeline_jobs": {
+        "indexes": [
+            {"keys": [("job_id", 1)], "unique": True},
+            {"keys": [("created_at", -1)]},
+            {"keys": [("status", 1)]},
+        ]
+    },
+    "news_articles": {
+        "indexes": [
+            {"keys": [("published_date", -1)]},
+            {"keys": [("related_stocks", 1)]},
+            {"keys": [("sentiment", 1)]},
+            {"keys": [("source", 1), ("published_date", -1)]},
+        ]
+    },
+    "backtest_results": {
+        "indexes": [
+            {"keys": [("symbol", 1), ("strategy", 1), ("created_at", -1)]},
+            {"keys": [("created_at", -1)]},
+        ]
+    },
+}
+
+
+async def setup_mongodb(mongo_url: str, db_name: str, check_only: bool = False):
+    """Create MongoDB collections and indexes."""
+    
+    try:
+        conn = await asyncpg.connect(dsn)
+        logger.info(f"Connected to PostgreSQL: {dsn}")
+        
+        # Execute schema
+        await conn.execute(POSTGRESQL_SCHEMA)
+        
+        # Check for TimescaleDB extension and apply optimizations if available
+        timescaledb_available = False
+        try:
+            # Try to create extension if it doesn't exist
+            await conn.execute("CREATE EXTENSION IF NOT EXISTS timescaledb;")
+            timescaledb_available = True
+            logger.info("⚡ TimescaleDB extension detected and enabled")
+        except asyncpg.exceptions.InsufficientPrivilegeError:
+            logger.warning("Not enough privileges to create timescaledb extension")
+        except asyncpg.exceptions.UndefinedFileError:
+            logger.info("TimescaleDB not installed on host. Proceeding with standard PostgreSQL.")
+        except Exception as e:
+            logger.warning(f"Could not enable TimescaleDB: {e}")
+            
+        if timescaledb_available:
+            logger.info("Applying TimescaleDB optimizations (Hypertables, Compression, Continuous Aggregates)...")
+            try:
+                # 1. Convert to Hypertables (if not already)
+                hypertable_check = await conn.fetchval(
+                    "SELECT count(*) FROM _timescaledb_catalog.hypertable WHERE table_name = 'prices_daily';"
+                )
+                
+                if hypertable_check == 0:
+                    logger.info("  -> Converting prices_daily to hypertable")
+                    await conn.execute(
+                        "SELECT create_hypertable('prices_daily', by_range('date', INTERVAL '1 month'), if_not_exists => TRUE);"
+                    )
+                    logger.info("  -> Converting technical_indicators to hypertable")
+                    await conn.execute(
+                        "SELECT create_hypertable('technical_indicators', by_range('date', INTERVAL '1 month'), if_not_exists => TRUE);"
+                    )
+                    
+                    # 2. Setup Compression Policies
+                    logger.info("  -> Setting up compression policies (data > 6 months)")
+                    await conn.execute("""
+                        ALTER TABLE prices_daily SET (
+                            timescaledb.compress,
+                            timescaledb.compress_segmentby = 'symbol',
+                            timescaledb.compress_orderby = 'date DESC'
+                        );
+                    """)
+                    await conn.execute("""
+                        ALTER TABLE technical_indicators SET (
+                            timescaledb.compress,
+                            timescaledb.compress_segmentby = 'symbol',
+                            timescaledb.compress_orderby = 'date DESC'
+                        );
+                    """)
+                    
+                    try:
+                        await conn.execute("SELECT add_compression_policy('prices_daily', INTERVAL '6 months');")
+                        await conn.execute("SELECT add_compression_policy('technical_indicators', INTERVAL '6 months');")
+                    except Exception as e:
+                        if "already exists" not in str(e):
+                            raise
+                    
+                    # 3. Setup Continuous Aggregates (Weekly and Monthly)
+                    logger.info("  -> Creating continuous aggregates for weekly/monthly OHLCV")
+                    await conn.execute("""
+                        CREATE MATERIALIZED VIEW IF NOT EXISTS prices_weekly
+                        WITH (timescaledb.continuous) AS
+                        SELECT
+                            symbol,
+                            time_bucket('1 week', date) AS week,
+                            first(open, date) AS open,
+                            max(high) AS high,
+                            min(low) AS low,
+                            last(close, date) AS close,
+                            sum(volume) AS volume
+                        FROM prices_daily
+                        GROUP BY symbol, week;
+                    """)
+                    
+                    await conn.execute("""
+                        CREATE MATERIALIZED VIEW IF NOT EXISTS prices_monthly
+                        WITH (timescaledb.continuous) AS
+                        SELECT
+                            symbol,
+                            time_bucket('1 month', date) AS month,
+                            first(open, date) AS open,
+                            max(high) AS high,
+                            min(low) AS low,
+                            last(close, date) AS close,
+                            sum(volume) AS volume
+                        FROM prices_daily
+                        GROUP BY symbol, month;
+                    """)
+                    
+                    try:
+                        await conn.execute("""
+                            SELECT add_continuous_aggregate_policy('prices_weekly',
+                                start_offset => INTERVAL '1 month',
+                                end_offset => INTERVAL '1 day',
+                                schedule_interval => INTERVAL '1 day');
+                        """)
+                    except Exception as e:
+                        if "already exists" not in str(e):
+                            logger.warning(f"Failed to add weekly refresh policy: {e}")
+                            
+                    try:
+                        await conn.execute("""
+                            SELECT add_continuous_aggregate_policy('prices_monthly',
+                                start_offset => INTERVAL '6 months',
+                                end_offset => INTERVAL '1 day',
+                                schedule_interval => INTERVAL '1 week');
+                        """)
+                    except Exception as e:
+                        if "already exists" not in str(e):
+                            logger.warning(f"Failed to add monthly refresh policy: {e}")
+            except Exception as e:
+                logger.error(f"Error applying TimescaleDB optimizations: {e}")
+        
+        # Verify tables
+        tables = await conn.fetch(
+            """SELECT table_name, 
+                      (SELECT COUNT(*) FROM information_schema.columns c 
                        WHERE c.table_name = t.table_name AND c.table_schema = 'public') as col_count
                FROM information_schema.tables t
                WHERE table_schema = 'public'
@@ -291,6 +507,13 @@ async def setup_mongodb(check_only: bool = False) -> bool:
     mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
     db_name = os.environ.get("MONGO_DB_NAME", os.environ.get("DB_NAME", "stockpulse"))
 
+async def setup_mongodb(mongo_url: str = None, db_name: str = None, check_only: bool = False):
+    """Create MongoDB indexes for all collections."""
+    if mongo_url is None:
+        mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
+    if db_name is None:
+        db_name = os.environ.get('MONGO_DB_NAME', os.environ.get('DB_NAME', 'stockpulse'))
+    
     try:
         from motor.motor_asyncio import AsyncIOMotorClient
     except ImportError:
@@ -475,3 +698,9 @@ async def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(asyncio.run(main()))
+        logger.warning("\nSome databases could not be set up. Check the errors above.")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

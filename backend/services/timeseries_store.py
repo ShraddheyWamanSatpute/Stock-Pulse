@@ -206,6 +206,50 @@ class TimeSeriesStore:
                     "SELECT COUNT(*) FROM prices_daily WHERE symbol = $1", symbol
                 )
             return await conn.fetchval("SELECT COUNT(*) FROM prices_daily")
+            
+    async def get_weekly_prices(
+        self, symbol: str, limit: int = 150
+    ) -> List[Dict[str, Any]]:
+        """
+        Get weekly aggregated price history for a symbol.
+        Leverages TimescaleDB continuous aggregate `prices_weekly` if available.
+        """
+        query = f"""
+            SELECT symbol, week as date, open, high, low, close, volume
+            FROM prices_weekly
+            WHERE symbol = $1
+            ORDER BY week DESC
+            LIMIT {limit}
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(query, symbol)
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning(f"Failed to fetch weekly prices from continuous aggregate (is TimescaleDB installed?): {e}")
+            return []
+            
+    async def get_monthly_prices(
+        self, symbol: str, limit: int = 60
+    ) -> List[Dict[str, Any]]:
+        """
+        Get monthly aggregated price history for a symbol.
+        Leverages TimescaleDB continuous aggregate `prices_monthly` if available.
+        """
+        query = f"""
+            SELECT symbol, month as date, open, high, low, close, volume
+            FROM prices_monthly
+            WHERE symbol = $1
+            ORDER BY month DESC
+            LIMIT {limit}
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(query, symbol)
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning(f"Failed to fetch monthly prices from continuous aggregate (is TimescaleDB installed?): {e}")
+            return []
     
     # ========================
     # Technical Indicators
