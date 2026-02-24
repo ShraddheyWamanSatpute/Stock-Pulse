@@ -150,6 +150,7 @@ class GrowwAPIExtractor:
         self._request_timestamps: List[float] = []
         self._last_request_time = 0
         self._is_initialized = False
+        self._rate_limit_lock = asyncio.Lock()
         
         # Extraction state tracking
         self._extraction_jobs: Dict[str, Dict] = {}
@@ -337,29 +338,31 @@ class GrowwAPIExtractor:
     
     async def _rate_limit_check(self):
         """Check and enforce rate limiting"""
-        current_time = time.time()
-        
-        # Clean old timestamps (older than 60 seconds)
-        self._request_timestamps = [
-            ts for ts in self._request_timestamps
-            if current_time - ts < 60
-        ]
-        
-        # Check per-minute limit
-        if len(self._request_timestamps) >= self.RATE_LIMITS["live_data"]["per_minute"]:
-            self.metrics.rate_limit_hits += 1
-            wait_time = 60 - (current_time - self._request_timestamps[0])
-            if wait_time > 0:
-                logger.warning(f"Rate limit reached, waiting {wait_time:.2f}s")
-                await asyncio.sleep(wait_time)
-        
-        # Check per-second limit (at least 100ms between requests)
-        time_since_last = current_time - self._last_request_time
-        if time_since_last < 0.1:
-            await asyncio.sleep(0.1 - time_since_last)
-        
-        self._request_timestamps.append(time.time())
-        self._last_request_time = time.time()
+        async with self._rate_limit_lock:
+            current_time = time.time()
+            
+            # Clean old timestamps (older than 60 seconds)
+            self._request_timestamps = [
+                ts for ts in self._request_timestamps
+                if current_time - ts < 60
+            ]
+            
+            # Check per-minute limit
+            if len(self._request_timestamps) >= self.RATE_LIMITS["live_data"]["per_minute"]:
+                self.metrics.rate_limit_hits += 1
+                wait_time = 60 - (current_time - self._request_timestamps[0])
+                if wait_time > 0:
+                    logger.warning(f"Rate limit reached, waiting {wait_time:.2f}s")
+                    await asyncio.sleep(wait_time)
+                    current_time = time.time()
+            
+            # Check per-second limit (at least 100ms between requests)
+            time_since_last = current_time - self._last_request_time
+            if time_since_last < 0.1:
+                await asyncio.sleep(0.1 - time_since_last)
+            
+            self._request_timestamps.append(time.time())
+            self._last_request_time = time.time()
     
     async def _make_request(
         self,
@@ -760,12 +763,24 @@ class GrowwAPIExtractor:
         
         results = {}
         
-        for i, symbol in enumerate(symbols):
-            result = await self.get_stock_quote(symbol, exchange=exchange)
-            results[symbol] = result
+        sem = asyncio.Semaphore(10)
+        
+        async def fetch_symbol(symbol):
+            async with sem:
+                res = await self.get_stock_quote(symbol, exchange=exchange)
+                return symbol, res
+
+        tasks = [fetch_symbol(sym) for sym in symbols]
+        completed = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for result in completed:
+            if isinstance(result, Exception):
+                continue
+            symbol, res = result
+            results[symbol] = res
             
-            self._extraction_jobs[job_id]["processed"] = i + 1
-            if result.status == ExtractionStatus.SUCCESS:
+            self._extraction_jobs[job_id]["processed"] += 1
+            if res.status == ExtractionStatus.SUCCESS:
                 self._extraction_jobs[job_id]["successful"] += 1
             else:
                 self._extraction_jobs[job_id]["failed"] += 1

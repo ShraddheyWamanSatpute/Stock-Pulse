@@ -56,7 +56,7 @@ export default function StockAnalyzer() {
     if (urlSymbol && urlSymbol !== symbol) {
       setSymbol(urlSymbol);
     }
-  }, [searchParams]);
+  }, [searchParams, symbol]);
 
   const fetchStock = async (sym) => {
     setLoading(true);
@@ -428,8 +428,8 @@ export default function StockAnalyzer() {
                     technicals?.rsi_14 < 30
                       ? "Oversold"
                       : technicals?.rsi_14 > 70
-                      ? "Overbought"
-                      : "Neutral"
+                        ? "Overbought"
+                        : "Neutral"
                   }
                 />
                 <StatRow label="MACD" value={formatNumber(technicals?.macd)} />
@@ -466,8 +466,8 @@ export default function StockAnalyzer() {
                         ml_prediction?.price_direction_short === "UP"
                           ? "bg-green-500/10 text-green-500"
                           : ml_prediction?.price_direction_short === "DOWN"
-                          ? "bg-red-500/10 text-red-500"
-                          : "bg-muted text-muted-foreground"
+                            ? "bg-red-500/10 text-red-500"
+                            : "bg-muted text-muted-foreground"
                       )}
                     >
                       {ml_prediction?.price_direction_short || "N/A"}
@@ -535,11 +535,11 @@ export default function StockAnalyzer() {
             {/* Short-Term Checklist Summary Card */}
             <Card className={cn(
               "bg-[#18181B] border-2",
-              analysis?.investment_checklists?.short_term?.summary?.verdict === "PASS" 
-                ? "border-green-500/50" 
+              analysis?.investment_checklists?.short_term?.summary?.verdict === "PASS"
+                ? "border-green-500/50"
                 : analysis?.investment_checklists?.short_term?.summary?.verdict === "FAIL"
-                ? "border-red-500/50"
-                : "border-yellow-500/50"
+                  ? "border-red-500/50"
+                  : "border-yellow-500/50"
             )}>
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
@@ -547,14 +547,14 @@ export default function StockAnalyzer() {
                     📋 Short-Term Checklist
                     <Badge variant="outline" className="text-xs">1-6 months</Badge>
                   </CardTitle>
-                  <Badge 
+                  <Badge
                     className={cn(
                       "text-xs",
-                      analysis?.investment_checklists?.short_term?.summary?.verdict === "PASS" 
-                        ? "bg-green-500/20 text-green-400" 
+                      analysis?.investment_checklists?.short_term?.summary?.verdict === "PASS"
+                        ? "bg-green-500/20 text-green-400"
                         : analysis?.investment_checklists?.short_term?.summary?.verdict === "FAIL"
-                        ? "bg-red-500/20 text-red-400"
-                        : "bg-yellow-500/20 text-yellow-400"
+                          ? "bg-red-500/20 text-red-400"
+                          : "bg-yellow-500/20 text-yellow-400"
                     )}
                   >
                     {analysis?.investment_checklists?.short_term?.summary?.verdict || "N/A"}
@@ -597,11 +597,11 @@ export default function StockAnalyzer() {
                         key={idx}
                         className={cn(
                           "p-2 rounded-md border",
-                          item.passed 
-                            ? "bg-green-500/5 border-green-500/20" 
-                            : item.is_deal_breaker 
-                            ? "bg-red-500/10 border-red-500/30" 
-                            : "bg-red-500/5 border-red-500/20"
+                          item.passed
+                            ? "bg-green-500/5 border-green-500/20"
+                            : item.is_deal_breaker
+                              ? "bg-red-500/10 border-red-500/30"
+                              : "bg-red-500/5 border-red-500/20"
                         )}
                       >
                         <div className="flex items-start gap-2">
@@ -631,11 +631,11 @@ export default function StockAnalyzer() {
             {/* Long-Term Checklist Summary Card */}
             <Card className={cn(
               "bg-[#18181B] border-2",
-              analysis?.investment_checklists?.long_term?.summary?.verdict === "PASS" 
-                ? "border-green-500/50" 
+              analysis?.investment_checklists?.long_term?.summary?.verdict === "PASS"
+                ? "border-green-500/50"
                 : analysis?.investment_checklists?.long_term?.summary?.verdict === "FAIL"
-                ? "border-red-500/50"
-                : "border-yellow-500/50"
+                  ? "border-red-500/50"
+                  : "border-yellow-500/50"
             )}>
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
@@ -643,14 +643,14 @@ export default function StockAnalyzer() {
                     📋 Long-Term Checklist
                     <Badge variant="outline" className="text-xs">3-10+ years</Badge>
                   </CardTitle>
-                  <Badge 
+                  <Badge
                     className={cn(
                       "text-xs",
-                      analysis?.investment_checklists?.long_term?.summary?.verdict === "PASS" 
-                        ? "bg-green-500/20 text-green-400" 
+                      analysis?.investment_checklists?.long_term?.summary?.verdict === "PASS"
+                        ? "bg-green-500/20 text-green-400"
                         : analysis?.investment_checklists?.long_term?.summary?.verdict === "FAIL"
-                        ? "bg-red-500/20 text-red-400"
-                        : "bg-yellow-500/20 text-yellow-400"
+                          ? "bg-red-500/20 text-red-400"
+                          : "bg-yellow-500/20 text-yellow-400"
                     )}
                   >
                     {analysis?.investment_checklists?.long_term?.summary?.verdict || "N/A"}
@@ -693,11 +693,11 @@ export default function StockAnalyzer() {
                         key={idx}
                         className={cn(
                           "p-2 rounded-md border",
-                          item.passed 
-                            ? "bg-green-500/5 border-green-500/20" 
-                            : item.is_deal_breaker 
-                            ? "bg-red-500/10 border-red-500/30" 
-                            : "bg-red-500/5 border-red-500/20"
+                          item.passed
+                            ? "bg-green-500/5 border-green-500/20"
+                            : item.is_deal_breaker
+                              ? "bg-red-500/10 border-red-500/30"
+                              : "bg-red-500/5 border-red-500/20"
                         )}
                       >
                         <div className="flex items-start gap-2">

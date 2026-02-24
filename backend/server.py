@@ -288,19 +288,31 @@ async def get_timeseries_prices(
 @api_router.get("/market/overview")
 async def get_market_overview():
     """Get market overview including indices, breadth, and sector performance"""
+    # Check Redis cache first (60s TTL)
+    if cache:
+        cached = cache.get("market:overview")
+        if cached is not None:
+            return cached
+    
     # Try real data first
+    overview = None
     if REAL_DATA_AVAILABLE and USE_REAL_DATA:
         try:
             indices = await get_market_indices()
             if indices:
-                # Merge with mock data for additional fields
                 overview = mock_market_overview()
                 overview.update(indices)
-                return overview
         except Exception as e:
             logger.error(f"Real data failed, falling back to mock: {e}")
     
-    return mock_market_overview()
+    if overview is None:
+        overview = mock_market_overview()
+    
+    # Cache in Redis
+    if cache:
+        cache.set("market:overview", overview, 60)
+    
+    return overview
 
 
 # ==================== STOCKS ====================
