@@ -231,6 +231,88 @@ async def health_check():
     return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
+@api_router.get("/database/health")
+async def database_health_check():
+    """Comprehensive health check for all database layers.
+
+    Returns connectivity status, row counts, and diagnostics for
+    PostgreSQL, MongoDB, Redis, and filesystem directories.
+    """
+    health = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "postgresql": {"status": "not_initialized"},
+        "mongodb": {"status": "unknown"},
+        "redis": {"status": "unknown"},
+        "filesystem": {"status": "unknown"},
+    }
+
+    # --- PostgreSQL ---
+    if _ts_store and _ts_store._is_initialized:
+        try:
+            stats = await _ts_store.get_stats()
+            health["postgresql"] = {
+                "status": "connected",
+                "tables": stats,
+            }
+        except Exception as e:
+            health["postgresql"] = {"status": "error", "error": str(e)}
+    else:
+        health["postgresql"]["message"] = (
+            "Time-series store not initialized. "
+            "Ensure PostgreSQL is running and TIMESERIES_DSN is set."
+        )
+
+    # --- MongoDB ---
+    try:
+        await db.command("ping")
+        collections = await db.list_collection_names()
+        coll_stats = {}
+        for coll_name in sorted(collections):
+            count = await db[coll_name].count_documents({})
+            coll_stats[coll_name] = {"documents": count}
+        health["mongodb"] = {
+            "status": "connected",
+            "database": db_name,
+            "collections_count": len(collections),
+            "collections": coll_stats,
+        }
+    except Exception as e:
+        health["mongodb"] = {"status": "error", "error": str(e)}
+
+    # --- Redis ---
+    if cache and cache.is_redis_available:
+        health["redis"] = {
+            "status": "connected",
+            **cache.get_stats(),
+        }
+    else:
+        health["redis"] = {
+            "status": "fallback",
+            "message": "Using in-memory cache (Redis not available)",
+            **(cache.get_stats() if cache else {}),
+        }
+
+    # --- Filesystem ---
+    base = Path(__file__).parent
+    dirs_to_check = ["reports", "data/bhavcopy", "models", "cache/html", "backups"]
+    dir_status = {}
+    for d in dirs_to_check:
+        full = base / d
+        dir_status[d] = {
+            "exists": full.exists(),
+            "writable": os.access(full, os.W_OK) if full.exists() else False,
+        }
+    health["filesystem"] = {"status": "ok", "directories": dir_status}
+
+    # --- Overall ---
+    pg_ok = health["postgresql"]["status"] == "connected"
+    mongo_ok = health["mongodb"]["status"] == "connected"
+    redis_ok = health["redis"]["status"] in ("connected", "fallback")
+    health["overall"] = "healthy" if (pg_ok and mongo_ok and redis_ok) else "degraded"
+
+    return health
+
+
 @api_router.get("/cache/stats")
 async def get_cache_stats():
     """Get Redis cache statistics"""
@@ -491,43 +573,6 @@ async def screen_stocks(request: ScreenerRequest):
             logger.debug(f"PostgreSQL screener fallback: {e}")
 
     # --- Fallback: in-memory filtering over mock/cached data ---
-    """Screen stocks based on multiple criteria (PostgreSQL JOINs with in-memory fallback)"""
-    
-    # Try PostgreSQL first for supported metrics
-    if _ts_store:
-        try:
-            pg_supported_metrics = {
-                "rsi_14", "sma_50", "sma_200", "macd", "macd_signal",
-                "close", "volume", "delivery_pct", "vwap",
-            }
-            
-            pg_filters = [f for f in request.filters if f.metric in pg_supported_metrics]
-            
-            if pg_filters:
-                # Build PostgreSQL query params
-                min_rsi = None
-                max_rsi = None
-                for f in pg_filters:
-                    if f.metric == "rsi_14":
-                        if f.operator in ("gt", "gte"):
-                            min_rsi = f.value
-                        elif f.operator in ("lt", "lte"):
-                            max_rsi = f.value
-                        elif f.operator == "between" and f.value2 is not None:
-                            min_rsi = f.value
-                            max_rsi = f.value2
-                
-                pg_results = await _ts_store.get_screener_data(
-                    min_rsi=min_rsi,
-                    max_rsi=max_rsi,
-                )
-                
-                if pg_results:
-                    logger.info(f"Screener: PostgreSQL returned {len(pg_results)} results")
-        except Exception as e:
-            logger.warning(f"PostgreSQL screener failed, using in-memory fallback: {e}")
-    
-    # In-memory fallback (always works)
     stocks = list(get_cached_stocks().values())
     results = []
 
@@ -2368,25 +2413,12 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Time-series store not available: {e}")
 
-    # Ensure MongoDB indexes exist
+    # Ensure MongoDB indexes exist (idempotent — safe to call on every startup)
     try:
         await _ensure_mongodb_indexes(db)
         logger.info("MongoDB indexes verified")
     except Exception as e:
         logger.warning(f"MongoDB index creation warning: {e}")
-    
-    # Ensure MongoDB indexes
-    try:
-        await db.watchlist.create_index("symbol", unique=True)
-        await db.portfolio.create_index("symbol", unique=True)
-        await db.news_articles.create_index("published_date", sparse=True)
-        await db.news_articles.create_index("related_stocks", sparse=True)
-        await db.backtest_results.create_index(
-            [("symbol", 1), ("strategy", 1), ("created_at", -1)]
-        )
-        logger.info("MongoDB indexes ensured")
-    except Exception as e:
-        logger.warning(f"MongoDB index creation failed: {e}")
     
     if WEBSOCKET_AVAILABLE:
         await price_broadcaster.start()

@@ -151,7 +151,8 @@ class GrowwAPIExtractor:
         self._last_request_time = 0
         self._is_initialized = False
         self._rate_limit_lock = asyncio.Lock()
-        
+        self._token_refresh_lock = asyncio.Lock()
+
         # Extraction state tracking
         self._extraction_jobs: Dict[str, Dict] = {}
         self._extraction_history: List[Dict] = []
@@ -231,28 +232,41 @@ class GrowwAPIExtractor:
                     )
     
     async def _refresh_access_token(self):
-        """Refresh the access token if it may have expired"""
-        logger.info("Refreshing access token...")
-        try:
-            await self._obtain_access_token()
-            
-            # Update the session headers with new token
-            if self.session and not self.session.closed:
-                await self.session.close()
-            
-            self.session = aiohttp.ClientSession(
-                headers={
-                    "Authorization": f"Bearer {self.access_token}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "X-API-VERSION": "1.0"
-                },
-                timeout=aiohttp.ClientTimeout(total=30)
-            )
-            logger.info("Session refreshed with new access token")
-        except Exception as e:
-            logger.error(f"Failed to refresh access token: {e}")
-            raise
+        """Refresh the access token if it may have expired.
+
+        Uses a lock so that concurrent 401 responses don't all trigger
+        parallel refresh attempts — only the first one does the work.
+        """
+        async with self._token_refresh_lock:
+            # If another coroutine already refreshed within the last 5 seconds, skip
+            if (
+                self.access_token_obtained_at
+                and (datetime.now(timezone.utc) - self.access_token_obtained_at).total_seconds() < 5
+            ):
+                logger.debug("Token was recently refreshed, skipping duplicate refresh")
+                return
+
+            logger.info("Refreshing access token...")
+            try:
+                await self._obtain_access_token()
+
+                # Update the session headers with new token
+                if self.session and not self.session.closed:
+                    await self.session.close()
+
+                self.session = aiohttp.ClientSession(
+                    headers={
+                        "Authorization": f"Bearer {self.access_token}",
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "X-API-VERSION": "1.0",
+                    },
+                    timeout=aiohttp.ClientTimeout(total=30),
+                )
+                logger.info("Session refreshed with new access token")
+            except Exception as e:
+                logger.error(f"Failed to refresh access token: {e}")
+                raise
         
     async def initialize(self):
         """Initialize the HTTP session: obtain access token and validate API connection"""
@@ -297,22 +311,43 @@ class GrowwAPIExtractor:
         self._is_initialized = False
     
     async def _test_api_connection(self) -> Dict:
-        """Test API connection and validate credentials"""
+        """Test API connection and validate credentials.
+
+        Uses the same ``/live-data/quote`` endpoint and parameter style as
+        ``get_stock_quote()`` so the validation accurately reflects whether
+        real data extraction will work.
+        """
         try:
-            # Try to get a simple LTP to validate the API key
             start_time = time.time()
             async with self.session.get(
-                f"{self.BASE_URL}/live-data/ltp",
-                params={"segment": "CASH", "exchange_symbols": "NSE_RELIANCE"}
+                f"{self.BASE_URL}/live-data/quote",
+                params={
+                    "exchange": "NSE",
+                    "segment": "CASH",
+                    "trading_symbol": "RELIANCE",
+                },
             ) as response:
                 latency = (time.time() - start_time) * 1000
-                
+
                 if response.status == 200:
                     data = await response.json()
                     if data.get("status") == "SUCCESS":
-                        return {"success": True, "latency_ms": latency, "message": "API connection successful", "data": data}
-                    else:
-                        return {"success": False, "message": f"API returned: {data.get('error', {}).get('message', 'Unknown error')}"}
+                        return {
+                            "success": True,
+                            "latency_ms": latency,
+                            "message": "API connection successful",
+                        }
+                    # Some responses may still be valid JSON without a "status" key
+                    if "last_price" in data or "ohlc" in data or "payload" in data:
+                        return {
+                            "success": True,
+                            "latency_ms": latency,
+                            "message": "API connection successful (non-standard response format)",
+                        }
+                    return {
+                        "success": False,
+                        "message": f"API returned unexpected response: {list(data.keys())[:10]}",
+                    }
                 elif response.status == 401:
                     return {"success": False, "message": "Authentication failed - invalid or expired access token"}
                 elif response.status == 403:
@@ -494,17 +529,33 @@ class GrowwAPIExtractor:
                 )
                 
                 if success:
-                    # Check if API returned success status
+                    # Extract the payload — Groww wraps data in different ways
+                    payload = None
                     if data.get("status") == "SUCCESS":
+                        payload = data.get("payload", data.get("data", data))
+                    elif "last_price" in data or "ohlc" in data:
+                        # Response body IS the payload (no wrapper)
+                        payload = data
+                    elif isinstance(data.get("payload"), dict):
+                        payload = data["payload"]
+                    elif isinstance(data.get("data"), dict):
+                        payload = data["data"]
+
+                    if payload is not None:
                         return ExtractionResult(
                             status=ExtractionStatus.SUCCESS,
                             symbol=symbol,
-                            data=self._transform_quote_data(data.get("payload", data), symbol),
+                            data=self._transform_quote_data(payload, symbol),
                             retries=retries,
-                            latency_ms=latency
+                            latency_ms=latency,
                         )
                     else:
-                        last_error = data.get("error", {}).get("message", "API returned failure status")
+                        # API returned 200 but no usable payload
+                        error_msg = data.get("error", {})
+                        if isinstance(error_msg, dict):
+                            last_error = error_msg.get("message", "API returned failure status")
+                        else:
+                            last_error = str(error_msg) or "API returned failure status"
                         retries += 1
                         self.metrics.retry_count += 1
                         if retries <= self.MAX_RETRIES:
@@ -656,30 +707,65 @@ class GrowwAPIExtractor:
         )
     
     def _transform_quote_data(self, raw_data: Dict, symbol: str) -> Dict:
-        """Transform raw quote data to standardized format (Groww API response)"""
+        """Transform raw Groww API quote data to standardized format.
+
+        The output includes canonical field names that downstream consumers
+        expect (``current_price``, ``price_change``, ``price_change_percent``,
+        ``open``, ``high``, ``low``, ``close``, ``volume``, ``prev_close``).
+
+        These names align with what ``_persist_to_timeseries()`` and the
+        WebSocket price broadcaster look for.
+        """
         try:
             # Handle OHLC which may be nested
             ohlc = raw_data.get("ohlc", {})
             if isinstance(ohlc, str):
-                # Parse string format like "{open: 149.50,high: 150.50,low: 148.50,close: 149.50}"
                 try:
                     import re
                     matches = re.findall(r'(\w+):\s*([\d.]+)', ohlc)
                     ohlc = {k: float(v) for k, v in matches}
-                except:
+                except Exception:
                     ohlc = {}
-            
+
+            # Derive core prices
+            last_price = raw_data.get("last_price", 0) or 0
+            close_price = ohlc.get("close", raw_data.get("close", 0)) or last_price
+            open_price = ohlc.get("open", raw_data.get("open", 0)) or 0
+            high_price = ohlc.get("high", raw_data.get("high", 0)) or 0
+            low_price = ohlc.get("low", raw_data.get("low", 0)) or 0
+            prev_close = raw_data.get("prev_close", 0) or 0
+            volume = raw_data.get("volume", 0) or 0
+
+            # Calculate change from prev_close
+            day_change = raw_data.get("day_change", 0) or 0
+            day_change_pct = raw_data.get("day_change_perc", 0) or 0
+            if not day_change and prev_close:
+                day_change = last_price - prev_close
+            if not day_change_pct and prev_close:
+                day_change_pct = round((day_change / prev_close) * 100, 2) if prev_close else 0
+
             return {
+                # Canonical fields (consumed by pipeline_service._persist_to_timeseries)
                 "symbol": symbol,
-                "last_price": raw_data.get("last_price", 0),
-                "open": ohlc.get("open", raw_data.get("open", 0)),
-                "high": ohlc.get("high", raw_data.get("high", 0)),
-                "low": ohlc.get("low", raw_data.get("low", 0)),
-                "close": ohlc.get("close", raw_data.get("close", 0)),
-                "prev_close": raw_data.get("prev_close", 0),
-                "volume": raw_data.get("volume", 0),
-                "day_change": raw_data.get("day_change", 0),
-                "day_change_percent": raw_data.get("day_change_perc", 0),
+                "current_price": last_price,
+                "ltp": last_price,
+                "open": open_price,
+                "high": high_price,
+                "low": low_price,
+                "close": close_price,
+                "prev_close": prev_close,
+                "previous_close": prev_close,
+                "volume": volume,
+                "total_traded_volume": volume,
+                "price_change": day_change,
+                "price_change_percent": day_change_pct,
+                "turnover": raw_data.get("turnover", 0) or 0,
+
+                # Extended quote fields
+                "day_open": open_price,
+                "day_high": high_price,
+                "day_low": low_price,
+                "last_price": last_price,
                 "bid_price": raw_data.get("bid_price", 0),
                 "bid_quantity": raw_data.get("bid_quantity", 0),
                 "offer_price": raw_data.get("offer_price", 0),
@@ -696,11 +782,10 @@ class GrowwAPIExtractor:
                 "last_trade_quantity": raw_data.get("last_trade_quantity", 0),
                 "last_trade_time": raw_data.get("last_trade_time", 0),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "raw_response": raw_data
             }
         except Exception as e:
             logger.error(f"Error transforming quote data for {symbol}: {e}")
-            return {"symbol": symbol, "error": str(e), "raw_response": raw_data}
+            return {"symbol": symbol, "error": str(e)}
     
     def _transform_historical_data(self, raw_data: Dict, symbol: str) -> Dict:
         """Transform raw historical data to standardized format"""
@@ -763,18 +848,20 @@ class GrowwAPIExtractor:
         
         results = {}
         
-        sem = asyncio.Semaphore(10)
-        
-        async def fetch_symbol(symbol):
+        # Limit concurrency to stay within rate limits (10 requests/second)
+        sem = asyncio.Semaphore(5)
+
+        async def fetch_symbol(sym):
             async with sem:
-                res = await self.get_stock_quote(symbol, exchange=exchange)
-                return symbol, res
+                res = await self.get_stock_quote(sym, exchange=exchange)
+                return sym, res
 
         tasks = [fetch_symbol(sym) for sym in symbols]
         completed = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         for result in completed:
             if isinstance(result, Exception):
+                logger.error(f"Bulk extraction exception: {result}")
                 continue
             symbol, res = result
             results[symbol] = res
