@@ -322,6 +322,10 @@ class DataPipelineService:
                 # For historical data, we'd need more parameters
                 results = await self.grow_extractor.extract_bulk_quotes(symbols)
             
+            # Initialize cache service for saving data
+            from services.cache_service import get_cache_service
+            cache = get_cache_service()
+            
             # Process results
             received_symbols = []
             for symbol, result in results.items():
@@ -331,6 +335,15 @@ class DataPipelineService:
                     job.successful_symbols += 1
                     received_symbols.append(symbol)
                     job.results[symbol] = result.data
+                    
+                    # Store live data in Redis!
+                    if cache:
+                        # Store as full JSON document
+                        cache.set_price(symbol, result.data)
+                        # Store as HASH for partial field reads
+                        cache.set_stock_hash(symbol, result.data)
+                        # Publish to WebSocket PUB/SUB
+                        cache.publish_price(symbol, result.data)
                 else:
                     job.failed_symbols += 1
                     job.errors.append({
@@ -338,6 +351,22 @@ class DataPipelineService:
                         "error": result.error,
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     })
+            
+            # Update top gainers and losers in Redis
+            if cache and received_symbols:
+                gainers = {}
+                losers = {}
+                for sym, data in job.results.items():
+                    pct = data.get("price_change_percent", 0)
+                    if pct > 0:
+                        gainers[sym] = pct
+                    elif pct < 0:
+                        losers[sym] = pct
+                
+                # Sort and send top 50 to Redis
+                gainers = dict(sorted(gainers.items(), key=lambda item: item[1], reverse=True)[:50])
+                losers = dict(sorted(losers.items(), key=lambda item: item[1])[:50])
+                cache.update_top_movers(gainers, losers)
             
             # Update metrics
             self.metrics.received_daily_symbols = len(received_symbols)
