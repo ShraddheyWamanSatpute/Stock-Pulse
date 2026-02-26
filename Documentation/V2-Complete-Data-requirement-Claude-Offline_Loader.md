@@ -566,6 +566,79 @@ These parameters support **strategies**, **ML models**, **backtesting**, **AI an
 
 ---
 
+## Appendix — Trade & Portfolio Analytics Parameters (Separate Tables)
+
+These parameters live in **separate tables** (trade logs and portfolio snapshots) and are **not counted inside the per‑stock 160/215 field totals**. They are designed for backtesting, performance analytics, and ML on trades/portfolios.
+
+### A. Trade-level execution log
+
+Minimum fields to capture every entry/exit precisely.
+
+| Field Name              | Level  | Used For                                      |
+|-------------------------|--------|-----------------------------------------------|
+| trade_id                | Trade  | Unique trade identifier                       |
+| strategy_id             | Trade  | Link to strategy/rule that generated trade    |
+| symbol                  | Trade  | Stock/underlying identifier                   |
+| side                    | Trade  | Long / Short / Buy / Sell                     |
+| quantity                | Trade  | Position size in shares                       |
+| entry_datetime          | Trade  | Exact time of entry                           |
+| entry_price             | Trade  | Executed entry price                          |
+| exit_datetime           | Trade  | Exact time of exit                            |
+| exit_price              | Trade  | Executed exit price                           |
+| stop_loss_price         | Trade  | Planned stop-loss at entry                    |
+| target_price            | Trade  | Planned target at entry                       |
+| fees_and_taxes          | Trade  | Total charges for the round-trip              |
+| slippage_pct            | Trade  | (Exec price − signal price) / signal price    |
+| pnl_absolute            | Trade  | Net P&L in currency after costs               |
+| pnl_pct                 | Trade  | P&L % on capital at risk or capital used      |
+| r_multiple              | Trade  | P&L / (entry_price − stop_loss_price)         |
+| holding_period_days     | Trade  | (exit_datetime − entry_datetime) in days      |
+| exit_reason             | Trade  | Stop-loss / Target / Time / Manual / Other    |
+| tags                    | Trade  | Free-form labels (e.g., breakout, mean-rev)   |
+
+### B. Trade outcome / label features (for ML & diagnostics)
+
+These can be derived **per trade** from price history and the execution log.
+
+| Field Name                   | Level  | Used For                                       |
+|------------------------------|--------|------------------------------------------------|
+| label_win_loss               | Trade  | Binary label (win / loss)                      |
+| label_return_bucket          | Trade  | Bucketed return class (e.g., <-5%, -5–0, …)    |
+| max_favorable_excursion_pct  | Trade  | Max profit % during trade window               |
+| max_adverse_excursion_pct    | Trade  | Max loss % during trade window                 |
+| drawdown_during_trade_pct    | Trade  | Worst drawdown from trade peak                 |
+| hit_stop_first               | Trade  | Whether SL was hit before target               |
+| hit_target_first             | Trade  | Whether target was hit before SL               |
+| regime_at_entry              | Trade  | Market regime tag (e.g., trending / range)     |
+| regime_at_exit               | Trade  | Market regime at exit                          |
+
+### C. Portfolio daily snapshot & risk
+
+One row **per portfolio per day** to track equity curve, exposures, and risk.
+
+| Field Name                        | Level      | Used For                                      |
+|-----------------------------------|------------|-----------------------------------------------|
+| date                              | Portfolio  | Snapshot date                                 |
+| portfolio_id                      | Portfolio  | Portfolio identifier                          |
+| total_equity_value                | Portfolio  | Mark-to-market portfolio value                |
+| cash_balance                      | Portfolio  | Available cash                                |
+| net_exposure_pct                  | Portfolio  | Net exposure vs equity                        |
+| gross_exposure_pct                | Portfolio  | Long + short exposure vs equity               |
+| num_positions                     | Portfolio  | Count of open positions                       |
+| top5_weight_concentration_pct     | Portfolio  | Concentration in top 5 holdings               |
+| sector_exposure_breakdown_json    | Portfolio  | Sector weights (serialized)                   |
+| realized_pnl_daily                | Portfolio  | Realized P&L for the day                      |
+| unrealized_pnl_daily              | Portfolio  | Open P&L at end of day                        |
+| turnover_pct_daily                | Portfolio  | Traded value / portfolio value per day        |
+| portfolio_beta_1y                 | Portfolio  | Beta vs benchmark using 1Y daily returns      |
+| portfolio_volatility_30d          | Portfolio  | 30-day annualised volatility of daily returns |
+| portfolio_max_drawdown_to_date    | Portfolio  | Max drawdown on equity curve to date          |
+| sharpe_ratio_portfolio_1y         | Portfolio  | 1Y Sharpe ratio                               |
+| sortino_ratio_portfolio_1y        | Portfolio  | 1Y Sortino ratio                              |
+| risk_contribution_json            | Portfolio  | Approx. risk contribution per holding         |
+
+---
+
 ## Inclusion checklist (System objectives & data by frequency)
 
 All parameters from the **System Objectives and Methodology** and **Data Parameters by Frequency** spec are included in this document:
