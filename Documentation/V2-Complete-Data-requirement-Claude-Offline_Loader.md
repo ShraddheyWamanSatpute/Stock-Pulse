@@ -1,760 +1,586 @@
-**COMPLETE DATA REQUIREMENTS SPECIFICATION**
+# StockPulse — Complete Data Requirements Specification
 
-Version 2.0 --- All 160 Data Fields
+**Version:** 3.0  
+**Platform:** StockPulse — Indian Stock Analysis Platform  
+**Scope:** Core 160 fields + Extended parameters for ML, strategies, analysis & prediction  
+**Last Updated:** February 2026  
 
-StockPulse - Indian Stock Analysis Platform
+---
 
-12 Categories • Complete Extraction Guide • Historical Depth • Update
-Frequencies
+## 1. System Objectives and Methodology
 
-**EXECUTIVE SUMMARY**
+The **StockPulse** system is designed to **maximize prediction capabilities** and **stock-picking efficiency** through a multi-layered analysis approach:
 
-This document specifies every data field required by StockPulse. Use
-this as the definitive reference for building your data extraction
-pipeline.
+| Layer | Component | Description |
+|-------|-----------|-------------|
+| **Data Layer** | Multi-Source Ingestion | Real-time and historical data from NSE/BSE, Screener, News, and Alternative sources. |
+| **Analysis Layer** | Quantitative & Qualitative | Combining **200+ financial ratios** with NLP-driven sentiment and management quality scores. |
+| **AI Layer** | Machine Learning Models | Utilizing LSTM, XGBoost, and Transformers for trend prediction and anomaly detection. |
+| **Strategy Layer** | Portfolio Optimization | Implementing **Hierarchical Risk Parity (HRP)** and **Factor-based ranking** for best returns. |
 
-  ----------------- ----------------- ----------------- --------------------
-  **Priority**      **Count**         **Description**   **Implementation**
+This document specifies all data parameters required to feed each layer.
 
-  **🔴 CRITICAL**   **58**            System cannot     Phase 1 - Before
-                                      function without  Go-Live
-                                      these             
+---
 
-  **🟡 IMPORTANT**  **52**            Significantly     Phase 2 - First
-                                      improves analysis Month
-                                      quality           
+## Executive Summary
 
-  **🟢 STANDARD**   **35**            Enhances specific Phase 3 - Within 3
-                                      features and ML   Months
+This document is the **definitive reference** for all data parameters required by StockPulse: core analysis, screening, **strategies**, **ML models**, **backtesting**, **AI analysis**, and **prediction**. Parameters are organised by **extraction frequency** (for pipeline scheduling) and by **category** (for implementation and validation).
 
-  **⚪ OPTIONAL**   **7**             Future advanced   Phase 4 - Future
-                                      features          
+| Priority            | Count  | Description                                  | Implementation      |
+|---------------------|--------|----------------------------------------------|---------------------|
+| **Critical**        | **58** | System cannot function without these         | Phase 1 — Before Go-Live |
+| **Important**       | **52** | Significantly improves analysis quality      | Phase 2 — First month   |
+| **Standard**        | **35** | Enhances features, ML & strategies           | Phase 3 — Within 3 months |
+| **Optional**        | **7**  | Future advanced features                     | Phase 4 — Future        |
+| **Metadata**        | **3**  | System tracking for confidence scoring       | Phase 2                 |
+| **Qualitative**     | **5**  | Manual or LLM-generated assessment            | Phase 3                 |
+| **Extended (ML/AI)**| **55** | ML features, strategies, prediction, AI      | Phase 3–4               |
+| **TOTAL (Core)**    | **160**| Complete platform base requirements           | —                      |
+| **TOTAL (Incl. Extended)** | **215** | Maximum parameters for best return & prediction | —                |
 
-  **🔵 METADATA**   **3**             System tracking   Phase 2
-                                      for confidence    
-                                      scoring           
+---
 
-  **💭              **5**             Manual assessment Phase 3
-  QUALITATIVE**                       or LLM-generated  
+## Part 1 — Extraction Frequency Guide
 
-  **TOTAL**         **160**           Complete platform \-
-                                      data requirements 
-  ----------------- ----------------- ----------------- --------------------
+Use this to schedule extraction jobs and feed the system at the right cadence.
 
-**Categories Overview**
-
-  ----------- -------------- ------------ --------------- ------------- ------------
-  **\#**      **Category**   **Fields**   **Primary       **History**   **Update**
-                                          Source**                      
-
-  1           Stock Master   14           NSE/BSE,        N/A           On Change
-              Data                        Screener.in                   
-
-  2           Price & Volume 13           NSE Bhavcopy    10 Years      Daily
-              (OHLCV)                                                   
-
-  3           Derived Price  11           Calculated      10 Years      Daily
-              Metrics                                                   
-
-  4           Income         18           Screener.in     10 Years      Quarterly
-              Statement                                                 
-
-  5           Balance Sheet  17           Screener.in     10 Years      Annual
-
-  6           Cash Flow      8            Screener.in     10 Years      Annual
-              Statement                                                 
-
-  7           Financial      11           Calculated      10 Years      Quarterly
-              Ratios                                                    
-
-  8           Valuation      17           Calculated      10 Years      Daily
-              Metrics                                                   
-
-  9           Shareholding   10           BSE Filings     5-7 Years     Quarterly
-              Pattern                                                   
-
-  10          Corporate      10           BSE/NSE         10 Years      On Event
-              Actions &                                                 
-              Events                                                    
-
-  11          News &         8            RSS Feeds       30 Days       Real-time
-              Sentiment                                                 
-
-  12          Technical      15           pandas-ta       10 Years      Daily
-              Indicators                                                
-
-  13          Qualitative &  8            Manual/System   Current       On Event
-              Metadata                                                  
-  ----------- -------------- ------------ --------------- ------------- ------------
-
-**CATEGORY 1: STOCK MASTER DATA (14 Fields)**
-
-Basic identifying information about each stock. Reference data that
-rarely changes.
-
-  -------- ------------------------- ------------ --------------- ------------ -------------- ---------------- -------------
-  **\#**   **Field Name**            **Type**     **Example**     **Update**   **Priority**   **Used For**     **Source**
-
-  1        **symbol**                String       RELIANCE        On listing   **🔴           Primary          NSE/BSE
-                                                                               Critical**     identifier       
-
-  2        **company_name**          String       Reliance        On change    **🔴           UI display name  NSE/BSE
-                                                  Industries Ltd               Critical**                      
-
-  3        **isin**                  String(12)   INE002A01018    Never        **🔴           Cross-exchange   NSE/BSE
-                                                                               Critical**     ID               
-
-  4        **nse_code**              String       RELIANCE        On change    **🔴           NSE trading      NSE
-                                                                               Critical**     symbol           
-
-  5        **bse_code**              String       500325          On change    **🟡           BSE scrip code   BSE
-                                                                               Important**                     
-
-  6        **sector**                String       Oil & Gas       On change    **🔴           Sector           Screener.in
-                                                                               Critical**     comparison       
-
-  7        **industry**              String       Refineries      On change    **🔴           Industry peer    Screener.in
-                                                                               Critical**     comparison       
-
-  8        **market_cap_category**   Enum         Large Cap       Daily        **🟡           Size             Calculated
-                                                                               Important**    classification   
-
-  9        **listing_date**          Date         1977-01-01      Never        **🟢           Company age      NSE/BSE
-                                                                               Standard**     analysis         
-
-  10       **face_value**            Decimal      10.00           On split     **🟢           Corp action      NSE/BSE
-                                                                               Standard**     adjustment       
-
-  11       **shares_outstanding**    Integer      6,766,000,000   Quarterly    **🟡           Market cap, EPS  BSE Filings
-                                                                               Important**    calc             
-
-  12       **free_float_shares**     Integer      3,200,000,000   Quarterly    **🟢           Float analysis   BSE Filings
-                                                                               Standard**                      
-
-  13       **website**               URL          www.ril.com     Never        **⚪           Company research Screener.in
-                                                                               Optional**                      
-
-  14       **registered_office**     String       Mumbai, MH      Never        **⚪           Company info     BSE
-                                                                               Optional**                      
-  -------- ------------------------- ------------ --------------- ------------ -------------- ---------------- -------------
-
-**CATEGORY 2: PRICE & VOLUME DATA (13 Fields)**
-
-Daily trading data. Foundation for technical analysis, valuations, and
-ML features.
-
-  -------- ------------------------- ---------- ---------- ------------- ------------- -------------- --------------- ------------
-  **\#**   **Field Name**            **Type**   **Unit**   **Example**   **History**   **Priority**   **Used For**    **Source**
-
-  15       **date**                  Date       \-         2025-02-10    10 yr         **🔴           Time series key NSE Bhavcopy
-                                                                                       Critical**                     
-
-  16       **open**                  Decimal    ₹          2845.50       10 yr         **🔴           Candlestick,    NSE Bhavcopy
-                                                                                       Critical**     gap analysis    
-
-  17       **high**                  Decimal    ₹          2878.90       10 yr         **🔴           Range,          NSE Bhavcopy
-                                                                                       Critical**     resistance      
-
-  18       **low**                   Decimal    ₹          2832.15       10 yr         **🔴           Range, support  NSE Bhavcopy
-                                                                                       Critical**                     
-
-  19       **close**                 Decimal    ₹          2867.35       10 yr         **🔴           All             NSE Bhavcopy
-                                                                                       Critical**     calculations    
-
-  20       **adjusted_close**        Decimal    ₹          2867.35       10 yr         **🔴           Accurate        yfinance
-                                                                                       Critical**     returns         
-
-  21       **volume**                Integer    shares     8,542,367     10 yr         **🔴           Liquidity, D10  NSE Bhavcopy
-                                                                                       Critical**                     
-
-  22       **delivery_volume**       Integer    shares     4,521,890     10 yr         **🟡           Genuine buying  NSE Bhavcopy
-                                                                                       Important**                    
-
-  23       **delivery_percentage**   Decimal    \%         52.94         10 yr         **🟡           Buyer           NSE Bhavcopy
-                                                                                       Important**    conviction      
-
-  24       **turnover**              Decimal    ₹ Cr       245.67        10 yr         **🟡           Value traded    NSE Bhavcopy
-                                                                                       Important**                    
-
-  25       **trades_count**          Integer    \-         142,567       10 yr         **🟡           Participation   NSE Bhavcopy
-                                                                                       Important**    breadth         
-
-  26       **prev_close**            Decimal    ₹          2845.50       10 yr         **🟢           Daily change    NSE Bhavcopy
-                                                                                       Standard**     calc            
-
-  27       **vwap**                  Decimal    ₹          2856.78       1 yr          **🟢           Institutional   NSE
-                                                                                       Standard**     benchmark       
-  -------- ------------------------- ---------- ---------- ------------- ------------- -------------- --------------- ------------
-
-**CATEGORY 3: DERIVED PRICE METRICS (11 Fields)**
-
-Calculated from OHLCV data. Not fetched directly.
-
-  ----------- ---------------------------- ---------------- ------------- -------------- --------------
-  **\#**      **Field Name**               **Calculation    **History**   **Priority**   **Used For**
-                                           Formula**                                     
-
-  28          **daily_return_pct**         ((close -        10 yr         **🔴           Return
-                                           prev_close) /                  Critical**     analysis,
-                                           prev_close) ×                                 volatility, ML
-                                           100                                           
-
-  29          **return_5d_pct**            ((close -        10 yr         **🟢           ML feature -
-                                           close_5d_ago) /                Standard**     5-day momentum
-                                           close_5d_ago) ×                               
-                                           100                                           
-
-  30          **return_20d_pct**           ((close -        10 yr         **🟢           ML feature -
-                                           close_20d_ago) /               Standard**     20-day
-                                           close_20d_ago) ×                              momentum
-                                           100                                           
-
-  31          **return_60d_pct**           ((close -        10 yr         **🟢           ML feature -
-                                           close_60d_ago) /               Standard**     60-day
-                                           close_60d_ago) ×                              momentum
-                                           100                                           
-
-  32          **day_range_pct**            ((high - low) /  10 yr         **🟢           Intraday
-                                           low) × 100                     Standard**     volatility, ML
-
-  33          **gap_percentage**           ((open -         10 yr         **🟢           Gap detection,
-                                           prev_close) /                  Standard**     ML feature
-                                           prev_close) ×                                 
-                                           100                                           
-
-  34          **52_week_high**             MAX(high) over   10 yr         **🔴           Technical
-                                           252 trading days               Critical**     analysis, Q8
-                                                                                         booster
-
-  35          **52_week_low**              MIN(low) over    10 yr         **🔴           Support
-                                           252 trading days               Critical**     detection
-
-  36          **distance_from_52w_high**   ((52w_high -     10 yr         **🟡           R6 penalty
-                                           close) /                       Important**    (\>30%)
-                                           52w_high) × 100                               
-
-  37          **volume_ratio**             volume /         10 yr         **🟡           Volume spike,
-                                           avg_volume_20d                 Important**    ML feature
-
-  38          **avg_volume_20d**           AVG(volume) over 10 yr         **🔴           D10
-                                           20 days                        Critical**     deal-breaker
-                                                                                         (\<50k)
-  ----------- ---------------------------- ---------------- ------------- -------------- --------------
-
-**CATEGORY 4: INCOME STATEMENT (18 Fields)**
-
-Quarterly and annual financial performance. Core inputs for fundamental
-analysis.
-
-  -------- ------------------------ ---------- ---------- ------------- ---------- --------- -------------- --------------- -------------
-  **\#**   **Field Name**           **Type**   **Unit**   **Example**   **Hist**   **Upd**   **Priority**   **Used For**    **Source**
-
-  39       **revenue**              Decimal    ₹ Cr       245,678       10 yr      Qtr       **🔴           D3, growth, P/S Screener.in
-                                                                                             Critical**                     
-
-  40       **revenue_growth_yoy**   Decimal    \%         15.67         10 yr      Qtr       **🔴           Scoring         Calculated
-                                                                                             Critical**     (\>15%=100)     
-
-  41       **revenue_growth_qoq**   Decimal    \%         3.45          10 yr      Qtr       **🟡           Quarterly       Calculated
-                                                                                             Important**    momentum        
-
-  42       **operating_profit**     Decimal    ₹ Cr       45,678        10 yr      Qtr       **🔴           Op margin calc  Screener.in
-                                                                                             Critical**                     
-
-  43       **operating_margin**     Decimal    \%         18.59         10 yr      Qtr       **🔴           Q7 (\>25%), R7  Screener.in
-                                                                                             Critical**                     
-
-  44       **gross_profit**         Decimal    ₹ Cr       67,890        10 yr      Ann       **🟡           Gross margin    Screener.in
-                                                                                             Important**                    
-
-  45       **gross_margin**         Decimal    \%         27.63         10 yr      Ann       **🟡           Pricing power   Calculated
-                                                                                             Important**                    
-
-  46       **net_profit**           Decimal    ₹ Cr       23,456        10 yr      Qtr       **🔴           EPS, P/E        Screener.in
-                                                                                             Critical**                     
-
-  47       **net_profit_margin**    Decimal    \%         9.54          10 yr      Qtr       **🔴           Profitability   Calculated
-                                                                                             Critical**                     
-
-  48       **eps**                  Decimal    ₹          34.67         10 yr      Qtr       **🔴           P/E, EPS growth Screener.in
-                                                                                             Critical**                     
-
-  49       **eps_growth_yoy**       Decimal    \%         18.34         10 yr      Qtr       **🔴           PEG calculation Calculated
-                                                                                             Critical**                     
-
-  50       **interest_expense**     Decimal    ₹ Cr       1,234         10 yr      Qtr       **🔴           Interest        Screener.in
-                                                                                             Critical**     coverage        
-
-  51       **depreciation**         Decimal    ₹ Cr       5,678         10 yr      Qtr       **🟡           EBITDA calc     Screener.in
-                                                                                             Important**                    
-
-  52       **ebitda**               Decimal    ₹ Cr       51,357        10 yr      Qtr       **🟡           EV/EBITDA       Screener.in
-                                                                                             Important**                    
-
-  53       **ebit**                 Decimal    ₹ Cr       45,678        10 yr      Qtr       **🟡           Interest        Calculated
-                                                                                             Important**    coverage        
-
-  54       **other_income**         Decimal    ₹ Cr       3,456         10 yr      Qtr       **🟡           Core vs         Screener.in
-                                                                                             Important**    non-core        
-
-  55       **tax_expense**          Decimal    ₹ Cr       12,345        10 yr      Qtr       **🟢           Tax rate        Screener.in
-                                                                                             Standard**                     
-
-  56       **effective_tax_rate**   Decimal    \%         25.67         10 yr      Ann       **🟢           Tax efficiency  Calculated
-                                                                                             Standard**                     
-  -------- ------------------------ ---------- ---------- ------------- ---------- --------- -------------- --------------- -------------
-
-**CATEGORY 5: BALANCE SHEET (17 Fields)**
-
-Annual and quarterly balance sheet data for financial health and
-leverage analysis.
-
-  -------- ---------------------------- ---------- ---------- ------------- ---------- --------- -------------- --------------- -------------
-  **\#**   **Field Name**               **Type**   **Unit**   **Example**   **Hist**   **Upd**   **Priority**   **Used For**    **Source**
-
-  57       **total_assets**             Decimal    ₹ Cr       567,890       10 yr      Ann       **🔴           ROA calculation Screener.in
-                                                                                                 Critical**                     
-
-  58       **total_equity**             Decimal    ₹ Cr       234,567       10 yr      Ann       **🔴           ROE, D/E, BV    Screener.in
-                                                                                                 Critical**                     
-
-  59       **total_debt**               Decimal    ₹ Cr       123,456       10 yr      Qtr       **🔴           D/E, D8         Screener.in
-                                                                                                 Critical**     deal-breaker    
-
-  60       **long_term_debt**           Decimal    ₹ Cr       98,765        10 yr      Ann       **🟡           Debt structure  Screener.in
-                                                                                                 Important**                    
-
-  61       **short_term_debt**          Decimal    ₹ Cr       24,691        10 yr      Ann       **🟡           Short-term      Screener.in
-                                                                                                 Important**    liquidity       
-
-  62       **cash_and_equivalents**     Decimal    ₹ Cr       45,678        10 yr      Qtr       **🔴           Net debt, Q3    Screener.in
-                                                                                                 Critical**                     
-
-  63       **net_debt**                 Decimal    ₹ Cr       77,777        10 yr      Qtr       **🟡           EV calculation  Calculated
-                                                                                                 Important**                    
-
-  64       **current_assets**           Decimal    ₹ Cr       123,456       10 yr      Ann       **🟡           Current ratio   Screener.in
-                                                                                                 Important**                    
-
-  65       **current_liabilities**      Decimal    ₹ Cr       98,765        10 yr      Ann       **🟡           Current/Quick   Screener.in
-                                                                                                 Important**    ratio           
-
-  66       **inventory**                Decimal    ₹ Cr       34,567        10 yr      Ann       **🟡           Quick ratio     Screener.in
-                                                                                                 Important**                    
-
-  67       **receivables**              Decimal    ₹ Cr       23,456        10 yr      Ann       **🟢           Receivables     Screener.in
-                                                                                                 Standard**     turnover        
-
-  68       **payables**                 Decimal    ₹ Cr       12,345        10 yr      Ann       **🟢           Payables        Screener.in
-                                                                                                 Standard**     turnover        
-
-  69       **fixed_assets**             Decimal    ₹ Cr       234,567       10 yr      Ann       **🟢           Asset turnover  Screener.in
-                                                                                                 Standard**                     
-
-  70       **intangible_assets**        Decimal    ₹ Cr       12,345        10 yr      Ann       **🟢           Goodwill        Screener.in
-                                                                                                 Standard**     analysis        
-
-  71       **reserves_and_surplus**     Decimal    ₹ Cr       198,765       10 yr      Ann       **🟢           Retained        Screener.in
-                                                                                                 Standard**     earnings        
-
-  72       **book_value_per_share**     Decimal    ₹          345.67        10 yr      Ann       **🟡           P/B ratio       Screener.in
-                                                                                                 Important**                    
-
-  73       **contingent_liabilities**   Decimal    ₹ Cr       5,678         10 yr      Ann       **🟢           R10 penalty     Annual Report
-                                                                                                 Standard**                     
-  -------- ---------------------------- ---------- ---------- ------------- ---------- --------- -------------- --------------- -------------
-
-**CATEGORY 6: CASH FLOW STATEMENT (8 Fields)**
-
-Cash generation and usage analysis.
-
-  -------- ------------------------- ---------- ---------- ------------- ---------- --------- -------------- ------------- -------------
-  **\#**   **Field Name**            **Type**   **Unit**   **Example**   **Hist**   **Upd**   **Priority**   **Used For**  **Source**
-
-  74       **operating_cash_flow**   Decimal    ₹ Cr       34,567        10 yr      Ann       **🔴           OCF \> NI     Screener.in
-                                                                                              Critical**     check, FCF    
-
-  75       **investing_cash_flow**   Decimal    ₹ Cr       -23,456       10 yr      Ann       **🔴           CapEx         Screener.in
-                                                                                              Critical**     analysis      
-
-  76       **financing_cash_flow**   Decimal    ₹ Cr       -12,345       10 yr      Ann       **🟡           Debt/equity   Screener.in
-                                                                                              Important**    financing     
-
-  77       **capital_expenditure**   Decimal    ₹ Cr       18,765        10 yr      Ann       **🔴           FCF = OCF -   Screener.in
-                                                                                              Critical**     CapEx         
-
-  78       **free_cash_flow**        Decimal    ₹ Cr       15,802        10 yr      Ann       **🔴           D5, FCF       Calculated
-                                                                                              Critical**     yield, Q9     
-
-  79       **dividends_paid**        Decimal    ₹ Cr       5,678         10 yr      Ann       **🟡           Dividend      Screener.in
-                                                                                              Important**    payout        
-
-  80       **debt_repayment**        Decimal    ₹ Cr       12,345        10 yr      Ann       **🟢           Debt          Screener.in
-                                                                                              Standard**     servicing     
-
-  81       **equity_raised**         Decimal    ₹ Cr       0.00          10 yr      Ann       **🟢           Dilution      Screener.in
-                                                                                              Standard**     tracking      
-  -------- ------------------------- ---------- ---------- ------------- ---------- --------- -------------- ------------- -------------
-
-**CATEGORY 7: FINANCIAL RATIOS (11 Fields)**
-
-Key ratios derived from financial statements.
-
-  ---------- --------------------------- ------------- ---------- ---------- -------------- ---------------
-  **\#**     **Ratio Name**              **Formula**   **Hist**   **Upd**    **Priority**   **Used For
-                                                                                            (Threshold)**
-
-  82         **roe**                     Net Profit /  10 yr      Qtr        **🔴           Q1 (\>20% 5yr),
-                                         Total Equity                        Critical**     R3 (\<10%)
-                                         × 100                                              
-
-  83         **roa**                     Net Profit /  10 yr      Ann        **🟡           Asset
-                                         Total Assets                        Important**    efficiency
-                                         × 100                                              
-
-  84         **roic**                    NOPAT /       10 yr      Ann        **🟡           Capital
-                                         Invested                            Important**    efficiency
-                                         Capital × 100                                      
-
-  85         **debt_to_equity**          Total Debt /  10 yr      Qtr        **🔴           D8 (\>5), R1,
-                                         Total Equity                        Critical**     Q3 (0)
-
-  86         **interest_coverage**       EBIT /        10 yr      Qtr        **🔴           D1 (\<2x), R2
-                                         Interest                            Critical**     (2-3x)
-                                         Expense                                            
-
-  87         **current_ratio**           Current       10 yr      Ann        **🟡           Liquidity
-                                         Assets /                            Important**    (\>1.5)
-                                         Current                                            
-                                         Liabilities                                        
-
-  88         **quick_ratio**             (Current      10 yr      Ann        **🟢           Short-term
-                                         Assets -                            Standard**     liquidity
-                                         Inventory) /                                       
-                                         Current Liab                                       
-
-  89         **asset_turnover**          Revenue /     10 yr      Ann        **🟢           Efficiency
-                                         Total Assets                        Standard**     analysis
-
-  90         **inventory_turnover**      COGS /        10 yr      Ann        **🟢           Working capital
-                                         Average                             Standard**     
-                                         Inventory                                          
-
-  91         **receivables_turnover**    Revenue /     10 yr      Ann        **🟢           Collection
-                                         Average                             Standard**     efficiency
-                                         Receivables                                        
-
-  92         **dividend_payout_ratio**   Dividends /   10 yr      Ann        **🟡           Q4 (10yr
-                                         Net Profit ×                        Important**    consecutive)
-                                         100                                                
-  ---------- --------------------------- ------------- ---------- ---------- -------------- ---------------
-
-**CATEGORY 8: VALUATION METRICS (17 Fields)**
-
-Current and historical valuation for relative and absolute analysis.
-
-  -------- -------------------------- ----------------- ---------- --------- -------------- ----------------- -------------
-  **\#**   **Field Name**             **Calculation**   **Hist**   **Upd**   **Priority**   **Used For**      **Source**
-
-  93       **market_cap**             Price × Shares    10 yr      Daily     **🔴           Size, EV calc     Calculated
-                                      Outstanding                            Critical**                       
-
-  94       **enterprise_value**       Market Cap + Net  10 yr      Daily     **🔴           EV/EBITDA         Calculated
-                                      Debt                                   Critical**                       
-
-  95       **pe_ratio**               Price / EPS (TTM) 10 yr      Daily     **🔴           Valuation, R8     Calculated
-                                                                             Critical**                       
-
-  96       **pe_ratio_forward**       Price / Estimated 3 yr       Qtr       **🔴           Forward valuation Trendlyne
-                                      EPS (FY+1)                             Critical**                       
-
-  97       **peg_ratio**              P/E / EPS Growth  10 yr      Qtr       **🔴           Growth-adjusted   Calculated
-                                      Rate                                   Critical**     val               
-
-  98       **pb_ratio**               Price / Book      10 yr      Daily     **🟡           Asset-based val   Calculated
-                                      Value per Share                        Important**                      
-
-  99       **ps_ratio**               Price / Revenue   10 yr      Daily     **🟡           Revenue-based val Calculated
-                                      per Share                              Important**                      
-
-  100      **ev_to_ebitda**           Enterprise Value  10 yr      Qtr       **🔴           Valuation scoring Calculated
-                                      / EBITDA                               Critical**                       
-
-  101      **ev_to_sales**            Enterprise Value  10 yr      Qtr       **🟢           Revenue-based EV  Calculated
-                                      / Revenue                              Standard**                       
-
-  102      **dividend_yield**         Annual Dividend / 10 yr      Daily     **🟡           Income investing  Calculated
-                                      Price × 100                            Important**                      
-
-  103      **fcf_yield**              FCF per Share /   10 yr      Ann       **🟡           Q9 booster (\>5%) Calculated
-                                      Price × 100                            Important**                      
-
-  104      **earnings_yield**         EPS / Price × 100 10 yr      Daily     **🟡           Bond yield        Calculated
-                                                                             Important**    comparison        
-
-  105      **sector_avg_pe**          Median P/E of     3 yr       Weekly    **🟡           R8 (P/E \> 2x     Screener.in
-                                      sector peers                           Important**    sector)           
-
-  106      **sector_avg_roe**         Median ROE of     3 yr       Weekly    **🟡           Sector benchmark  Screener.in
-                                      sector peers                           Important**                      
-
-  107      **industry_avg_pe**        Median P/E of     3 yr       Weekly    **🟢           Industry          Screener.in
-                                      industry peers                         Standard**     comparison        
-
-  108      **historical_pe_median**   Median P/E over 5 10 yr      Daily     **🟢           Historical        Calculated
-                                      years                                  Standard**     valuation         
-
-  109      **sector_performance**     Sector index      1 yr       Daily     **🟡           Sector strength   NSE Indices
-                                      return (1m, 3m,                        Important**    check             
-                                      1y)                                                                     
-  -------- -------------------------- ----------------- ---------- --------- -------------- ----------------- -------------
-
-**CATEGORY 9: SHAREHOLDING PATTERN (10 Fields)**
-
-Quarterly shareholding data from regulatory filings.
-
-  -------- ----------------------------- ---------- ---------- ------------- ---------- --------- -------------- --------------- ---------------
-  **\#**   **Field Name**                **Type**   **Unit**   **Example**   **Hist**   **Upd**   **Priority**   **Used For**    **Source**
-
-  110      **promoter_holding**          Decimal    \%         50.29         5-7 yr     Qtr       **🔴           Ownership, R4   BSE Filings
-                                                                                                  Critical**                     
-
-  111      **promoter_pledging**         Decimal    \%         12.45         3-5 yr     Qtr       **🔴           D7 (\>80%), R5  BSE/Trendlyne
-                                                                                                  Critical**                     
-
-  112      **fii_holding**               Decimal    \%         23.56         5-7 yr     Qtr       **🔴           Q6 booster      BSE Filings
-                                                                                                  Critical**                     
-
-  113      **dii_holding**               Decimal    \%         18.34         5-7 yr     Qtr       **🟡           Domestic inst   BSE Filings
-                                                                                                  Important**                    
-
-  114      **public_holding**            Decimal    \%         7.81          5-7 yr     Qtr       **🟡           Retail          BSE Filings
-                                                                                                  Important**    participation   
-
-  115      **promoter_holding_change**   Decimal    \%         -1.23         5-7 yr     Qtr       **🟡           R4 (↓\>5%), Q5  Calculated
-                                                                                                  Important**    (↑)             
-
-  116      **fii_holding_change**        Decimal    \%         +2.34         5-7 yr     Qtr       **🟡           Q6 (↑\>2%)      Calculated
-                                                                                                  Important**                    
-
-  117      **num_shareholders**          Integer    \-         2,456,789     5-7 yr     Qtr       **🟢           Retail breadth  BSE Filings
-                                                                                                  Standard**                     
-
-  118      **mf_holding**                Decimal    \%         8.45          5-7 yr     Qtr       **🟢           MF interest     BSE Filings
-                                                                                                  Standard**                     
-
-  119      **insurance_holding**         Decimal    \%         5.67          5-7 yr     Qtr       **🟢           Insurance       BSE Filings
-                                                                                                  Standard**     interest        
-  -------- ----------------------------- ---------- ---------- ------------- ---------- --------- -------------- --------------- ---------------
-
-**CATEGORY 10: CORPORATE ACTIONS & EVENTS (10 Fields)**
-
-Dividends, splits, bonus, events, and stock status.
-
-  -------- ------------------------ ---------------- ---------- ------------- ---------- --------- -------------- -------------- ------------
-  **\#**   **Field Name**           **Type**         **Unit**   **Example**   **Hist**   **Upd**   **Priority**   **Used For**   **Source**
-
-  120      **dividend_per_share**   Decimal          ₹          8.50          10 yr      On Event  **🟡           Div yield, Q4  BSE/NSE
-                                                                                                   Important**                   
-
-  121      **ex_dividend_date**     Date             \-         2025-02-15    10 yr      On Event  **🟡           Price          BSE/NSE
-                                                                                                   Important**    adjustment     
-
-  122      **stock_split_ratio**    String           \-         1:2           10 yr      On Event  **🟡           Price/shares   BSE/NSE
-                                                                                                   Important**    adj            
-
-  123      **bonus_ratio**          String           \-         1:1           10 yr      On Event  **🟡           Shares         BSE/NSE
-                                                                                                   Important**    adjustment     
-
-  124      **rights_issue_ratio**   String           \-         1:5 @ ₹500    10 yr      On Event  **🟢           Dilution       BSE/NSE
-                                                                                                   Standard**     tracking       
-
-  125      **buyback_details**      String           \-         ₹500Cr @      10 yr      On Event  **🟢           Capital return BSE/NSE
-                                                                ₹2500                              Standard**                    
-
-  126      **next_earnings_date**   Date             \-         2025-04-15    Current    On Event  **🟡           Checklist item BSE Announce
-                                                                                                   Important**                   
-
-  127      **pending_events**       List\[Object\]   \-         \[{AGM,       Current    On Event  **🟡           Catalyst       BSE Announce
-                                                                2025-07}\]                         Important**    calendar       
-
-  128      **stock_status**         Enum             \-         ACTIVE        Current    On Event  **🔴           D6             NSE/BSE
-                                                                                                   Critical**     deal-breaker   
-
-  129      **sebi_investigation**   Boolean          \-         false         Current    On Event  **🔴           D2             SEBI/News
-                                                                                                   Critical**     deal-breaker   
-  -------- ------------------------ ---------------- ---------- ------------- ---------- --------- -------------- -------------- ------------
-
-**CATEGORY 11: NEWS & SENTIMENT (8 Fields)**
-
-Real-time news and sentiment analysis data.
-
-  -------- ----------------------------- ---------------- ---------- ------------------ ---------- ----------- -------------- --------------
-  **\#**   **Field Name**                **Type**         **Unit**   **Example**        **Hist**   **Upd**     **Priority**   **Used For**
-
-  130      **news_headline**             String           \-         Reliance Q3 profit 30 days    Real-time   **🟡           News display
-                                                                     rises                                     Important**    
-
-  131      **news_body_text**            String           \-         (Full article      30 days    Real-time   **🟡           Full sentiment
-                                                                     text)                                     Important**    
-
-  132      **news_source**               String           \-         Moneycontrol       30 days    Real-time   **🟢           Source
-                                                                                                               Standard**     credibility
-
-  133      **news_timestamp**            DateTime         \-         2025-02-10T14:30   30 days    Real-time   **🟡           Recency weight
-                                                                                                               Important**    
-
-  134      **news_sentiment_score**      Decimal          -1 to 1    0.75               30 days    Real-time   **🟡           Sentiment
-                                                                                                               Important**    scoring
-
-  135      **stock_tickers_mentioned**   List\[String\]   \-         \[RELIANCE, TCS\]  30 days    Real-time   **🟢           Stock tagging
-                                                                                                               Standard**     
-
-  136      **credit_rating**             String           \-         CRISIL AAA         Current    On Change   **🟡           D9
-                                                                                                               Important**    deal-breaker
-
-  137      **credit_outlook**            Enum             \-         Stable             Current    On Change   **🟢           Credit trend
-                                                                                                               Standard**     
-  -------- ----------------------------- ---------------- ---------- ------------------ ---------- ----------- -------------- --------------
-
-**CATEGORY 12: TECHNICAL INDICATORS (15 Fields)**
-
-All calculated from OHLCV using pandas-ta. Not fetched directly.
-
-  -------- ---------------------- ----------------- ------------- ---------- --------- -------------- -----------------
-  **\#**   **Indicator**          **Calculation**   **Library**   **Hist**   **Upd**   **Priority**   **Used For**
-
-  138      **sma_20**             SMA(close, 20)    pandas-ta     10 yr      Daily     **🟡           Short-term trend
-                                                                                       Important**    
-
-  139      **sma_50**             SMA(close, 50)    pandas-ta     10 yr      Daily     **🔴           Medium trend,
-                                                                                       Critical**     checklist
-
-  140      **sma_200**            SMA(close, 200)   pandas-ta     10 yr      Daily     **🔴           Long-term trend
-                                                                                       Critical**     
-
-  141      **ema_12**             EMA(close, 12)    pandas-ta     10 yr      Daily     **🟡           MACD calculation
-                                                                                       Important**    
-
-  142      **ema_26**             EMA(close, 26)    pandas-ta     10 yr      Daily     **🟡           MACD calculation
-                                                                                       Important**    
-
-  143      **rsi_14**             RSI(close, 14)    pandas-ta     10 yr      Daily     **🔴           Overbought/sold
-                                                                                       Critical**     (30-70)
-
-  144      **macd**               EMA(12) - EMA(26) pandas-ta     10 yr      Daily     **🔴           Momentum scoring
-                                                                                       Critical**     
-
-  145      **macd_signal**        EMA(MACD, 9)      pandas-ta     10 yr      Daily     **🔴           Signal crossovers
-                                                                                       Critical**     
-
-  146      **bollinger_upper**    SMA(20) +         pandas-ta     10 yr      Daily     **🟡           Volatility bands
-                                  2×StdDev                                             Important**    
-
-  147      **bollinger_lower**    SMA(20) -         pandas-ta     10 yr      Daily     **🟡           Volatility bands
-                                  2×StdDev                                             Important**    
-
-  148      **atr_14**             ATR(14)           pandas-ta     10 yr      Daily     **🟡           Stop-loss calc
-                                                                                       Important**    
-
-  149      **adx_14**             ADX(14)           pandas-ta     10 yr      Daily     **🟢           Trend strength
-                                                                                       Standard**     
-
-  150      **obv**                On Balance Volume pandas-ta     10 yr      Daily     **🟢           Volume
-                                                                                       Standard**     confirmation
-
-  151      **support_level**      Pivot low         Custom        1 yr       Daily     **🟡           Stop-loss,
-                                  calculation                                          Important**    checklist
-
-  152      **resistance_level**   Pivot high        Custom        1 yr       Daily     **🟡           Target, checklist
-                                  calculation                                          Important**    
-  -------- ---------------------- ----------------- ------------- ---------- --------- -------------- -----------------
-
-**CATEGORY 13: QUALITATIVE & METADATA (8 Fields)**
-
-Manual assessments, LLM-generated, and system tracking fields.
-
-  ----------- -------------------------------- ---------------------- -------------- ------------- ---------------
-  **\#**      **Field Name**                   **Type**               **Used For**   **Input       **Priority**
-                                                                                     Method**      
-
-  153         **moat_assessment**              Enum/String            Long-term      Manual/LLM    **💭
-                                                                      checklist:                   Qualitative**
-                                                                      Competitive                  
-                                                                      moat                         
-
-  154         **management_assessment**        Enum/String            Long-term      Manual/LLM    **💭
-                                                                      checklist:                   Qualitative**
-                                                                      Management                   
-                                                                      track record                 
-
-  155         **industry_growth_assessment**   Enum/String            Long-term      Manual/LLM    **💭
-                                                                      checklist:                   Qualitative**
-                                                                      Industry                     
-                                                                      tailwinds                    
-
-  156         **disruption_risk**              Enum/String            Long-term      Manual/LLM    **💭
-                                                                      checklist:                   Qualitative**
-                                                                      Existential                  
-                                                                      disruption                   
-
-  157         **fraud_history**                Boolean                Long-term      Manual/News   **💭
-                                                                      checklist: No                Qualitative**
-                                                                      accounting                   
-                                                                      fraud                        
-
-  158         **field_availability**           Dict\[str,Bool\]       Confidence:    System        **🔵 Metadata**
-                                                                      Data                         
-                                                                      Completeness                 
-                                                                      (40%)                        
-
-  159         **field_last_updated**           Dict\[str,DateTime\]   Confidence:    System        **🔵 Metadata**
-                                                                      Data Freshness               
-                                                                      (30%)                        
-
-  160         **multi_source_values**          Dict\[str,Dict\]       Confidence:    System        **🔵 Metadata**
-                                                                      Source                       
-                                                                      Agreement                    
-                                                                      (15%)                        
-  ----------- -------------------------------- ---------------------- -------------- ------------- ---------------
-
-**Primary Data Sources Summary**
-
-  ----------------- ----------------- ----------------- -----------------
-  **Source**        **Data Provided** **Fields**        **Cost**
-
-  **Screener.in**   All fundamentals, 60+               Free / ₹4k/yr
-                    ratios, 10-year                     
-                    history, peer                       
-                    data                                
-
-  **NSE Bhavcopy**  Official EOD      15                Free
-                    OHLCV, delivery                     
-                    data, bulk deals                    
-
-  **BSE Filings**   Shareholding,     15                Free
-                    corporate                           
-                    announcements,                      
-                    results                             
-
-  **Trendlyne**     FII/DII changes,  8                 Free (limited)
-                    pledging trends                     
-
-  **yfinance**      Adjusted close,   10                Free
-                    backup prices                       
-
-  **RSS Feeds**     News from         4                 Free
-                    Moneycontrol, ET,                   
-                    BS                                  
-
-  **Rating          Credit ratings    3                 Free
-  Agencies**        (CRISIL, ICRA,                      
-                    CARE)                               
-
-  **pandas-ta**     All technical     15                Free (library)
-                    indicators                          
-                    (calculated)                        
-  ----------------- ----------------- ----------------- -----------------
-
-*This document specifies all 160 data fields for StockPulse. Use as your
-definitive reference for the data extraction pipeline.*
+| Frequency      | Description                    | Typical Schedule           | Use Case                          |
+|----------------|--------------------------------|----------------------------|-----------------------------------|
+| **CONTINUOUS** | Updated on every write/event   | On every pipeline run      | Metadata, confidence, system state |
+| **REAL_TIME**  | As soon as data is available   | Every 1–5 min (market hrs) | News, sentiment, live LTP/depth   |
+| **HOURLY**     | Once per hour                  | 0 * * * * (cron)           | Optional: intraday aggregates     |
+| **DAILY**      | After market close (EOD)       | 18:00 IST                  | OHLCV, technicals, valuations    |
+| **WEEKLY**     | Once per week                  | Sunday 00:00               | Sector/industry peer averages     |
+| **MONTHLY**     | Once per month                 | 1st of month               | Optional macro, monthly rolls     |
+| **QUARTERLY**  | After results season           | 45 days after quarter end  | Income, ratios, shareholding      |
+| **ANNUAL**     | After annual reports           | 90 days after FY end       | Balance sheet, cash flow          |
+| **ON_EVENT**   | When event occurs              | Trigger-based / polling    | Corporate actions, earnings, SEBI |
+| **ONCE / NEVER** | One-time or rare change      | On listing / manual        | Listing date, company static info |
+
+---
+
+## Part 2 — Parameters by Extraction Frequency
+
+### 2.1 CONTINUOUS (3 parameters)
+
+System-generated; updated whenever related data is written.
+
+| #   | Field Name             | Type   | Used For                    | Priority   |
+|-----|------------------------|--------|-----------------------------|------------|
+| 158 | field_availability     | Dict   | Confidence: data completeness (40%) | Metadata |
+| 159 | field_last_updated     | Dict   | Confidence: data freshness (30%)    | Metadata |
+| 160 | multi_source_values   | Dict   | Confidence: source agreement (15%) | Metadata |
+
+---
+
+### 2.2 CONTINUOUS / REAL-TIME (Intraday)
+
+*Required for high-frequency monitoring and intraday sentiment analysis.*
+
+**Live market data (NSE/BSE or broker feed)**
+
+| #    | Field Name               | Type   | Used For              | Source      | Priority   |
+|------|--------------------------|--------|------------------------|-------------|------------|
+| 161  | last_traded_price        | Decimal| Live LTP               | NSE/BSE / DHAN/Broker | Important  |
+| 162  | market_depth_bid_ask     | Object | Order book depth, bid-ask spread | DHAN/Broker | Standard   |
+| 216  | bid_ask_spread           | Decimal| Liquidity / cost       | NSE/BSE Feed | Standard   |
+| 217  | tick_volume              | Integer| Tick-by-tick volume   | NSE/BSE Feed | Optional   |
+
+**News & sentiment (RSS, Social APIs)**
+
+| #    | Field Name               | Type   | Used For              | Source      | Priority   |
+|------|--------------------------|--------|------------------------|-------------|------------|
+| 130  | news_headline            | String | Breaking news display  | RSS Feeds   | Important  |
+| 131  | news_body_text           | String | Full sentiment (NLP)   | RSS Feeds   | Important  |
+| 132  | news_source              | String | Source credibility     | RSS Feeds   | Standard   |
+| 133  | news_timestamp           | DateTime | Recency weight       | RSS Feeds   | Important  |
+| 134  | news_sentiment_score     | Decimal | Sentiment polarity score | Calculated/NLP | Important |
+| 135  | stock_tickers_mentioned | List   | Stock tagging          | NLP         | Standard   |
+| 163  | social_mentions_7d       | Integer | Social media (Twitter/Reddit) | Social APIs | Optional   |
+| 164  | forum_sentiment_avg      | Decimal | Forums / Valuepickr   | Scrape      | Optional   |
+
+**Credit & system health**
+
+| #    | Field Name               | Type   | Used For              | Source      | Priority   |
+|------|--------------------------|--------|------------------------|-------------|------------|
+| 136  | credit_rating            | String | D9 deal-breaker        | Rating Agencies | Important |
+| 137  | credit_outlook           | Enum   | Credit trend           | Rating Agencies | Standard   |
+| 218  | api_latency_ms           | Integer| System health          | Internal Logs | Optional   |
+| 219  | data_ingestion_rate      | Decimal| System health          | Internal Logs | Optional   |
+| 220  | model_inference_time_ms  | Integer| System health          | Internal Logs | Optional   |
+
+---
+
+### 2.3 HOURLY / PERIODIC (Intraday)
+
+*Used for mid-day trend adjustments and momentum tracking.*
+
+| Parameter Category | Data Fields | Primary Source |
+|--------------------|-------------|----------------|
+| **Intraday technicals** | Hourly RSI, MACD crossovers (hourly), VWAP (intraday) | Calculated from tick/1-min data |
+| **Market breadth** | Advance-Decline ratio (hourly), Sectoral heatmap, VIX / India VIX fluctuations | NSE / Calculated |
+
+| #   | Field Name                | Used For              | Source     |
+|-----|---------------------------|------------------------|------------|
+| 221 | rsi_hourly                | Intraday momentum      | Calculated |
+| 222 | macd_crossover_hourly    | Intraday signal        | Calculated |
+| 223 | vwap_intraday             | Hourly VWAP            | NSE / Calculated |
+| 224 | advance_decline_ratio     | Market breadth         | NSE / Calculated |
+| 225 | sectoral_heatmap          | Sector strength intraday | NSE / Calculated |
+| 226 | india_vix                 | Volatility index       | NSE        |
+
+---
+
+### 2.4 DAILY (End of Day)
+
+EOD price, derived metrics, valuation, technicals, and daily ML/strategy features. **Extract after market close (e.g. 18:00 IST).**
+
+**Price & volume (13)**  
+| #   | Field Name           | Type   | Used For              | Source        |
+|-----|----------------------|--------|------------------------|---------------|
+| 15  | date                 | Date   | Time series key         | NSE Bhavcopy  |
+| 16  | open                 | Decimal| Candlestick, gap        | NSE Bhavcopy  |
+| 17  | high                 | Decimal| Range, resistance        | NSE Bhavcopy  |
+| 18  | low                  | Decimal| Range, support          | NSE Bhavcopy  |
+| 19  | close                | Decimal| All calculations        | NSE Bhavcopy  |
+| 20  | adjusted_close       | Decimal| Accurate returns        | yfinance     |
+| 21  | volume               | Integer| Liquidity, D10          | NSE Bhavcopy  |
+| 22  | delivery_volume      | Integer| Genuine buying         | NSE Bhavcopy  |
+| 23  | delivery_percentage  | Decimal| Buyer conviction        | NSE Bhavcopy  |
+| 24  | turnover             | Decimal| Value traded            | NSE Bhavcopy  |
+| 25  | trades_count         | Integer| Participation breadth   | NSE Bhavcopy  |
+| 26  | prev_close           | Decimal| Daily change            | NSE Bhavcopy  |
+| 27  | vwap                 | Decimal| Institutional benchmark | NSE          |
+
+**Derived price metrics (11)**  
+| #   | Field Name               | Formula / Logic              | Used For              |
+|-----|---------------------------|------------------------------|------------------------|
+| 28  | daily_return_pct          | (close − prev_close) / prev_close × 100 | Return, volatility, ML |
+| 29  | return_5d_pct             | (close − close_5d_ago) / close_5d_ago × 100 | 5d momentum      |
+| 30  | return_20d_pct            | (close − close_20d_ago) / close_20d_ago × 100 | 20d momentum   |
+| 31  | return_60d_pct            | (close − close_60d_ago) / close_60d_ago × 100 | 60d momentum   |
+| 32  | day_range_pct             | (high − low) / low × 100     | Intraday volatility   |
+| 33  | gap_percentage            | (open − prev_close) / prev_close × 100 | Gap detection   |
+| 34  | week_52_high              | MAX(high) over 252 days      | Technical, Q8         |
+| 35  | week_52_low               | MIN(low) over 252 days       | Support               |
+| 36  | distance_from_52w_high    | (52w_high − close) / 52w_high × 100 | R6 penalty    |
+| 37  | volume_ratio              | volume / avg_volume_20d      | Volume spike, ML      |
+| 38  | avg_volume_20d            | AVG(volume) over 20 days     | D10 deal-breaker      |
+
+**Valuation (17)** — depend on daily close + fundamentals  
+| #   | Field Name             | Used For           | #   | Field Name                | Used For            |
+|-----|------------------------|--------------------|-----|---------------------------|---------------------|
+| 93  | market_cap             | Size, EV           | 102 | dividend_yield            | Income investing    |
+| 94  | enterprise_value        | EV/EBITDA          | 103 | fcf_yield                 | Q9 booster          |
+| 95  | pe_ratio               | Valuation, R8      | 104 | earnings_yield            | Bond comparison     |
+| 96  | pe_ratio_forward        | Forward valuation  | 105 | sector_avg_pe             | R8 (P/E vs sector)  |
+| 97  | peg_ratio              | Growth-adjusted    | 106 | sector_avg_roe             | Sector benchmark    |
+| 98  | pb_ratio               | Asset-based val    | 107 | industry_avg_pe           | Industry comparison |
+| 99  | ps_ratio               | Revenue-based val  | 108 | historical_pe_median      | Historical val      |
+| 100 | ev_to_ebitda           | Valuation scoring  | 109 | sector_performance        | Sector strength     |
+| 101 | ev_to_sales             | Revenue-based EV   |     |                           |                     |
+
+**Technical indicators (15 + Ichimoku)** — calculated from OHLCV (pandas-ta)  
+| #   | Field Name         | #   | Field Name         | #   | Field Name          |
+|-----|--------------------|-----|--------------------|-----|---------------------|
+| 138 | sma_20             | 143 | rsi_14             | 148 | atr_14              |
+| 139 | sma_50             | 144 | macd               | 149 | adx_14              |
+| 140 | sma_200            | 145 | macd_signal        | 150 | obv                 |
+| 141 | ema_12             | 146 | bollinger_upper    | 151 | support_level       |
+| 142 | ema_26             | 147 | bollinger_lower    | 152 | resistance_level    |
+| 227 | ichimoku_tenkan     | 228 | ichimoku_kijun     | 229 | ichimoku_senkou_a_b | Trend (Ichimoku Cloud) |
+
+**Extended — daily ML / strategy (22)**  
+| #   | Field Name               | Used For                          | Source/Method     |
+|-----|--------------------------|------------------------------------|-------------------|
+| 165 | realized_volatility_10d  | Volatility forecast, GARCH, risk   | Calculated        |
+| 166 | realized_volatility_20d  | ML feature, risk                   | Calculated        |
+| 167 | return_1d_pct            | Same as daily_return_pct           | Calculated        |
+| 168 | return_3d_pct            | Short momentum                     | Calculated        |
+| 169 | return_10d_pct           | Momentum (XGBoost/LSTM)            | Calculated        |
+| 170 | momentum_rank_sector     | Relative strength vs sector        | Calculated        |
+| 171 | price_vs_sma20_pct       | Distance from SMA20                | Calculated        |
+| 172 | price_vs_sma50_pct       | Distance from SMA50                | Calculated        |
+| 173 | volume_zscore            | Unusual volume (anomaly)           | Calculated        |
+| 174 | volatility_percentile_1y  | Vol regime                         | Calculated        |
+| 175 | stoch_k                  | Stochastic %K (strategies)         | pandas-ta         |
+| 176 | stoch_d                  | Stochastic %D (strategies)         | pandas-ta         |
+| 177 | cci_20                   | Commodity Channel Index            | pandas-ta         |
+| 178 | williams_r                | Williams %R                       | pandas-ta         |
+| 179 | cmf                      | Chaikin Money Flow                 | pandas-ta         |
+| 180 | macd_histogram           | MACD − Signal (backtest)           | Calculated        |
+| 181 | turnover_20d_avg         | Liquidity feature                  | Calculated        |
+| 182 | free_float_market_cap    | Float size (ML)                    | Calculated        |
+| 183 | days_since_earnings      | Event feature (ML)                 | Calculated        |
+| 184 | days_to_earnings         | Event feature (ML)                 | Calculated        |
+| 185 | trading_day_of_week      | Calendar feature (optional)        | System            |
+| 186 | nifty_50_return_1m       | Index momentum (optional)          | NSE Indices       |
+| 230 | fii_net_activity_daily   | FII buy/sell (₹ Cr)                | NSE / BSE         |
+| 231 | dii_net_activity_daily   | DII buy/sell (₹ Cr)                | NSE / BSE         |
+| 232 | sp500_return_1d          | Global market (S&P 500)            | Yahoo Finance     |
+| 233 | nasdaq_return_1d         | Global market (Nasdaq)             | Yahoo Finance     |
+
+**Risk & performance metrics — per-stock (rolling, optional advanced)**  
+*These are calculated from historical daily returns and index benchmarks to support risk-adjusted ranking and portfolio construction. They are **additional** to the original 215-parameter set.*
+
+| #   | Field Name               | Window / Logic                                            | Used For                           |
+|-----|--------------------------|-----------------------------------------------------------|------------------------------------|
+| 249 | beta_1y                  | Cov(stock, index) / Var(index), 1Y daily returns         | Systematic risk vs Nifty/sector   |
+| 250 | beta_3y                  | Same as beta_1y over 3Y (if history available)           | Long-term risk profile            |
+| 251 | max_drawdown_1y          | Max peak-to-trough fall on 1Y equity curve               | Drawdown risk                     |
+| 252 | sharpe_ratio_1y          | Annualised excess return / volatility, 1Y daily returns  | Risk-adjusted return (overall)    |
+| 253 | sortino_ratio_1y         | Excess return / downside deviation, 1Y daily returns     | Downside-risk-adjusted return     |
+| 254 | information_ratio_1y     | Active return vs index / tracking error, 1Y              | Alpha quality vs benchmark        |
+| 255 | rolling_volatility_30d   | Std dev of daily returns over last 30 trading days       | Short-term risk regime            |
+| 256 | downside_deviation_1y    | Std dev of negative returns only, 1Y                     | Tail risk                         |
+
+---
+
+### 2.5 WEEKLY
+
+*Medium-term trends and broader market shifts.*
+
+| Parameter Category | Data Fields | Primary Source |
+|--------------------|-------------|----------------|
+| **Trend analysis** | Weekly MA crossovers, Support/Resistance (weekly) | Calculated |
+| **Sector/peer** | Sector avg P/E, Sector avg ROE, Industry avg P/E | Screener.in |
+| **Alternative data** | Google Trends (stock-specific keywords), Job postings growth | Google Trends / LinkedIn |
+
+| #   | Field Name       | Used For              | Source     |
+|-----|------------------|------------------------|------------|
+| 105 | sector_avg_pe    | R8 (P/E vs sector)     | Screener.in |
+| 106 | sector_avg_roe   | Sector benchmark       | Screener.in |
+| 107 | industry_avg_pe  | Industry comparison    | Screener.in |
+| 234 | sma_weekly_crossover  | Weekly trend signal   | Calculated |
+| 235 | support_resistance_weekly | Weekly S/R levels  | Calculated |
+| 236 | google_trends_score    | Search interest (stock keywords) | Google Trends |
+| 237 | job_postings_growth   | Hiring trend (sector/company) | LinkedIn / Scrape |
+
+---
+
+### 2.6 MONTHLY
+
+*Macroeconomic and sectoral health indicators.*
+
+| Parameter Category | Data Fields | Primary Source |
+|--------------------|-------------|----------------|
+| **Macro indicators** | CPI inflation, IIP (Industrial Production), RBI Repo Rate, USD/INR | RBI / MOSPI |
+| **Commodity prices** | Crude (Brent), Gold, Steel, Copper | MCX / Bloomberg / Yahoo |
+
+| #   | Field Name           | Used For        | Source     |
+|-----|----------------------|-----------------|------------|
+| 238 | cpi_inflation        | Macro context   | RBI / MOSPI |
+| 239 | iip_growth           | Industrial production | MOSPI  |
+| 240 | rbi_repo_rate        | Rate environment| RBI        |
+| 241 | usdinr_rate          | FX / FII context| RBI / Yahoo |
+| 242 | crude_brent_price    | Commodity       | MCX / Yahoo |
+| 243 | gold_price           | Safe-haven      | MCX / Yahoo |
+| 244 | steel_price          | Commodity       | MCX / Bloomberg |
+| 245 | copper_price         | Commodity       | MCX / Bloomberg |
+
+---
+
+### 2.7 QUARTERLY (18 + 11 + 10 + 4 = 43 parameters)
+
+Income statement, financial ratios, shareholding, and quarterly valuation/earnings. **Extract within 45 days of quarter end.**
+
+**Income statement (18)**  
+| #   | Field Name             | #   | Field Name           | #   | Field Name          |
+|-----|------------------------|-----|----------------------|-----|---------------------|
+| 39  | revenue                | 46  | net_profit           | 53  | ebit                |
+| 40  | revenue_growth_yoy      | 47  | net_profit_margin    | 54  | other_income        |
+| 41  | revenue_growth_qoq      | 48  | eps                  | 55  | tax_expense         |
+| 42  | operating_profit       | 49  | eps_growth_yoy        | 56  | effective_tax_rate  |
+| 43  | operating_margin        | 50  | interest_expense     |     |                     |
+| 44  | gross_profit           | 51  | depreciation         |     |                     |
+| 45  | gross_margin           | 52  | ebitda               |     |                     |
+
+**Financial ratios (11)**  
+| #   | Field Name           | #   | Field Name            | #   | Field Name             |
+|-----|----------------------|-----|------------------------|-----|-------------------------|
+| 82  | roe                  | 86  | interest_coverage      | 90  | inventory_turnover     |
+| 83  | roa                  | 87  | current_ratio          | 91  | receivables_turnover    |
+| 84  | roic                 | 88  | quick_ratio            | 92  | dividend_payout_ratio   |
+| 85  | debt_to_equity       | 89  | asset_turnover         |     |                         |
+
+**Shareholding (10)**  
+| #   | Field Name               | #   | Field Name             |
+|-----|--------------------------|-----|-------------------------|
+| 110 | promoter_holding         | 116 | fii_holding_change      |
+| 111 | promoter_pledging        | 117 | num_shareholders        |
+| 112 | fii_holding              | 118 | mf_holding              |
+| 113 | dii_holding              | 119 | insurance_holding       |
+| 114 | public_holding           |     |                         |
+| 115 | promoter_holding_change  |     |                         |
+
+**Extended — quarterly (4) + management (2)**  
+| #   | Field Name             | Used For              | Source      |
+|-----|------------------------|------------------------|-------------|
+| 187 | earnings_surprise_pct   | Earnings beat/miss (ML)| Screener/BSE |
+| 188 | analyst_rating_consensus| Consensus (AI/ML)      | Trendlyne/Broker |
+| 189 | target_price_consensus | Target (AI/ML)         | Trendlyne/Broker |
+| 190 | num_analysts           | Coverage               | Trendlyne/Broker |
+| 246 | concall_transcript_available | Concall text for NLP | Manual / Filings |
+| 247 | management_guidance_sentiment_score | Guidance tone (LLM) | Manual / LLM |
+
+---
+
+### 2.8 ANNUAL (17 + 8 + 4 = 29 parameters)
+
+Balance sheet, cash flow, and annual-only ratios. **Extract within 90 days of FY end.**
+
+**Balance sheet (17)**  
+| #   | Field Name               | #   | Field Name             | #   | Field Name                |
+|-----|--------------------------|-----|-------------------------|-----|----------------------------|
+| 57  | total_assets             | 64  | current_assets          | 71  | reserves_and_surplus      |
+| 58  | total_equity             | 65  | current_liabilities     | 72  | book_value_per_share      |
+| 59  | total_debt               | 66  | inventory               | 73  | contingent_liabilities    |
+| 60  | long_term_debt           | 67  | receivables             |     |                            |
+| 61  | short_term_debt           | 68  | payables                |     |                            |
+| 62  | cash_and_equivalents     | 69  | fixed_assets            |     |                            |
+| 63  | net_debt                 | 70  | intangible_assets       |     |                            |
+
+**Cash flow (8)**  
+| #   | Field Name               | #   | Field Name             |
+|-----|--------------------------|-----|-------------------------|
+| 74  | operating_cash_flow      | 78  | free_cash_flow          |
+| 75  | investing_cash_flow      | 79  | dividends_paid          |
+| 76  | financing_cash_flow      | 80  | debt_repayment          |
+| 77  | capital_expenditure       | 81  | equity_raised           |
+
+**Extended — annual (4)**  
+| #   | Field Name               | Used For           | Source      |
+|-----|--------------------------|--------------------|-------------|
+| 191 | revenue_5y_cagr          | Long-term growth   | Calculated  |
+| 192 | eps_5y_cagr              | EPS growth trend   | Calculated  |
+| 193 | roe_5y_avg               | Consistency        | Calculated  |
+| 194 | fcf_3y_avg               | Cash stability     | Calculated  |
+
+---
+
+### 2.9 ON_EVENT (10 + 5 qualitative = 15 parameters)
+
+Corporate actions, events, and qualitative assessments. **Extract when event occurs or on change.**
+
+**Corporate actions & events (10)**  
+| #   | Field Name           | #   | Field Name           |
+|-----|----------------------|-----|----------------------|
+| 120 | dividend_per_share    | 126 | next_earnings_date   |
+| 121 | ex_dividend_date     | 127 | pending_events       |
+| 122 | stock_split_ratio    | 128 | stock_status         |
+| 123 | bonus_ratio          | 129 | sebi_investigation   |
+| 124 | rights_issue_ratio   |     |                      |
+| 125 | buyback_details      |     |                      |
+
+**Qualitative & metadata (5 + 3 system)**  
+| #   | Field Name                   | Input Method   | Used For           |
+|-----|------------------------------|----------------|--------------------|
+| 153 | moat_assessment               | Manual/LLM     | Competitive moat   |
+| 154 | management_assessment         | Manual/LLM     | Management track   |
+| 155 | industry_growth_assessment   | Manual/LLM     | Industry tailwinds |
+| 156 | disruption_risk              | Manual/LLM     | Disruption risk    |
+| 157 | fraud_history                | Manual/News    | No accounting fraud|
+
+---
+
+### 2.10 YEARLY / ONCE (Master & structural data)
+
+*Structural data and long-term assessment. Extract on listing or when changed (rare).*
+
+| Parameter Category | Data Fields | Primary Source |
+|--------------------|-------------|----------------|
+| **Master data** | Company Name, ISIN, Sector, Industry, Listing Date, Face Value | NSE/BSE |
+| **Balance sheet (annual)** | Total Assets, Long-term Debt, Share Capital, Reserves | Annual Reports / Screener |
+| **Qualitative moat** | Competitive advantage description, Regulatory risk assessment | Manual / Research / LLM |
+
+**Stock master (14)**  
+| #   | Field Name             | Type   | When to Update   | Source        |
+|-----|------------------------|--------|------------------|---------------|
+| 1   | symbol                 | String | On listing        | NSE/BSE       |
+| 2   | company_name           | String | On change         | NSE/BSE       |
+| 3   | isin                   | String(12) | Never         | NSE/BSE       |
+| 4   | nse_code               | String | On change         | NSE           |
+| 5   | bse_code               | String | On change         | BSE           |
+| 6   | sector                 | String | On change         | Screener.in   |
+| 7   | industry               | String | On change         | Screener.in   |
+| 9   | listing_date           | Date   | Never             | NSE/BSE       |
+| 10  | face_value              | Decimal| On split          | NSE/BSE       |
+| 13  | website                | URL    | Never             | Screener.in   |
+| 14  | registered_office      | String | Never             | BSE           |
+
+**Updated daily (but reference data):**  
+| #   | Field Name             | Source     |
+|-----|------------------------|------------|
+| 8   | market_cap_category    | Calculated |
+| 11  | shares_outstanding     | BSE Filings (quarterly) |
+| 12  | free_float_shares      | BSE Filings (quarterly) |
+
+**Qualitative (yearly/on event):**  
+| #   | Field Name                   | Used For                        | Source      |
+|-----|------------------------------|----------------------------------|-------------|
+| 153 | moat_assessment               | Competitive advantage description | Manual/LLM |
+| 248 | regulatory_risk_assessment   | Regulatory risk (SEBI, sector)  | Manual/LLM  |
+
+---
+
+### 2.11 DERIVATIVES (F&O) — Daily / Intraday (Optional but Recommended)
+
+*Futures and options data to capture market positioning, sentiment, and implied volatility. These fields are recommended for advanced strategies and ML models and are **additional** to the original 215-parameter set.*
+
+**Futures positioning (index and stock futures)**  
+| #   | Field Name                | Frequency   | Used For                                   | Source            |
+|-----|---------------------------|------------|--------------------------------------------|-------------------|
+| 257 | futures_oi                | Daily EOD  | Overall positioning (long/short interest)  | NSE F&O           |
+| 258 | futures_oi_change_pct     | Daily EOD  | OI build-up/unwinding classification       | Calculated (Δ OI) |
+| 259 | futures_price_near        | Daily EOD  | Near-month futures price                   | NSE F&O           |
+| 260 | futures_basis_pct         | Daily EOD  | (Futures − Spot) / Spot × 100              | Calculated        |
+| 261 | fii_index_futures_long_oi | Daily EOD  | FII long index futures positioning         | NSE / SEBI data   |
+| 262 | fii_index_futures_short_oi| Daily EOD  | FII short index futures positioning        | NSE / SEBI data   |
+
+**Options sentiment & implied volatility**  
+| #   | Field Name               | Frequency   | Used For                                   | Source            |
+|-----|--------------------------|------------|--------------------------------------------|-------------------|
+| 263 | options_call_oi_total    | Daily EOD  | Total call OI (nearest expiries)           | NSE Option Chain  |
+| 264 | options_put_oi_total     | Daily EOD  | Total put OI (nearest expiries)            | NSE Option Chain  |
+| 265 | put_call_ratio_oi        | Daily EOD  | Sentiment via OI (PCR OI)                  | Calculated        |
+| 266 | put_call_ratio_volume    | Daily EOD  | Sentiment via traded volume (PCR Volume)   | Calculated        |
+| 267 | options_max_pain_strike  | Daily EOD  | Max pain strike for nearest expiry         | Calculated        |
+| 268 | iv_atm_pct               | Daily / RT | Implied vol of nearest ATM option          | NSE Option Chain  |
+| 269 | iv_percentile_1y         | Daily EOD  | Percentile of current IV vs 1Y IV history  | Calculated        |
+| 270 | pcr_index_level          | Daily EOD  | Index-level PCR (e.g., Nifty/BankNifty)    | NSE F&O           |
+
+---
+
+## Part 3 — Parameters by Category (Quick Reference)
+
+| #   | Category                  | Field Count | Primary Source   | History  | Frequency      |
+|-----|---------------------------|-------------|------------------|----------|----------------|
+| 1   | Stock Master Data         | 14          | NSE/BSE, Screener| N/A      | On change / Once |
+| 2   | Price & Volume (OHLCV)    | 13          | NSE Bhavcopy     | 10 yr    | Daily          |
+| 3   | Derived Price Metrics     | 11          | Calculated       | 10 yr    | Daily          |
+| 4   | Income Statement          | 18          | Screener.in      | 10 yr    | Quarterly      |
+| 5   | Balance Sheet             | 17          | Screener.in      | 10 yr    | Annual         |
+| 6   | Cash Flow Statement       | 8           | Screener.in      | 10 yr    | Annual         |
+| 7   | Financial Ratios          | 11          | Calculated       | 10 yr    | Quarterly      |
+| 8   | Valuation Metrics         | 17          | Calculated       | 10 yr    | Daily/Weekly   |
+| 9   | Shareholding Pattern      | 10          | BSE Filings      | 5–7 yr   | Quarterly      |
+| 10  | Corporate Actions & Events| 10          | BSE/NSE         | 10 yr    | On event       |
+| 11  | News & Sentiment           | 8           | RSS Feeds        | 30 days  | Real-time      |
+| 12  | Technical Indicators       | 15          | pandas-ta        | 10 yr    | Daily          |
+| 13  | Qualitative & Metadata     | 8           | Manual/System   | Current  | On event / Continuous |
+| 14  | Extended (ML/Strategies/AI)| 55          | Mixed            | Per field| Per frequency  |
+|     | **TOTAL**                  | **215**     |                  |          |                |
+
+---
+
+## Part 4 — Extended Parameters Summary (161–215)
+
+These parameters support **strategies**, **ML models**, **backtesting**, **AI analysis**, and **prediction** to maximise stock-picking and return potential.
+
+| ID Range | Group                    | Count | Frequency   | Used For                          |
+|----------|---------------------------|-------|-------------|------------------------------------|
+| 161–164  | Live / sentiment          | 4     | Real-time   | Broker LTP/depth, social/forum     |
+| 165–186  | Daily ML & strategy       | 22    | Daily       | Volatility, momentum, technicals, events |
+| 187–190  | Quarterly analyst/earnings| 4     | Quarterly   | Earnings surprise, consensus       |
+| 191–194  | Annual growth/quality     | 4     | Annual      | 5y CAGRs, 5y ROE, 3y FCF          |
+| 195–215  | Reserved / future         | 21    | TBD         | Additional ML, macro, alternative data |
+
+**Full list — Extended parameters (161–215)**
+
+| #   | Field Name                 | Frequency  | Used For                          |
+|-----|----------------------------|------------|------------------------------------|
+| 161 | last_traded_price          | Real-time  | Live LTP (broker API)              |
+| 162 | market_depth_bid_ask       | Real-time  | Order book (broker API)            |
+| 163 | social_mentions_7d         | Real-time  | Social buzz (optional)             |
+| 164 | forum_sentiment_avg        | Real-time  | Forums (optional)                  |
+| 165 | realized_volatility_10d    | Daily      | GARCH, risk, ML                     |
+| 166 | realized_volatility_20d    | Daily      | ML, volatility forecast             |
+| 167 | return_1d_pct              | Daily      | Same as daily_return_pct           |
+| 168 | return_3d_pct              | Daily      | Short momentum, ML                  |
+| 169 | return_10d_pct             | Daily      | Momentum, XGBoost/LSTM              |
+| 170 | momentum_rank_sector       | Daily      | Relative strength                   |
+| 171 | price_vs_sma20_pct         | Daily      | ML feature                         |
+| 172 | price_vs_sma50_pct         | Daily      | ML feature                         |
+| 173 | volume_zscore              | Daily      | Anomaly detection                   |
+| 174 | volatility_percentile_1y   | Daily      | Vol regime                         |
+| 175 | stoch_k                    | Daily      | Stochastic (strategies)             |
+| 176 | stoch_d                    | Daily      | Stochastic (strategies)             |
+| 177 | cci_20                     | Daily      | CCI (strategies)                    |
+| 178 | williams_r                 | Daily      | Williams %R (strategies)             |
+| 179 | cmf                        | Daily      | Chaikin Money Flow                  |
+| 180 | macd_histogram             | Daily      | MACD − Signal (backtest)             |
+| 181 | turnover_20d_avg           | Daily      | Liquidity feature                   |
+| 182 | free_float_market_cap      | Daily      | Float size (ML)                     |
+| 183 | days_since_earnings        | Daily      | Event feature (ML)                  |
+| 184 | days_to_earnings           | Daily      | Event feature (ML)                  |
+| 185 | trading_day_of_week        | Daily      | Calendar (optional)                |
+| 186 | nifty_50_return_1m         | Daily      | Index momentum (optional)           |
+| 187 | earnings_surprise_pct      | Quarterly  | Earnings beat/miss (ML)             |
+| 188 | analyst_rating_consensus   | Quarterly  | Consensus (AI/ML)                   |
+| 189 | target_price_consensus     | Quarterly  | Target (AI/ML)                      |
+| 190 | num_analysts               | Quarterly  | Coverage                           |
+| 191 | revenue_5y_cagr            | Annual     | Long-term growth                   |
+| 192 | eps_5y_cagr                | Annual     | EPS growth trend                   |
+| 193 | roe_5y_avg                 | Annual     | ROE consistency                    |
+| 194 | fcf_3y_avg                 | Annual     | FCF stability                      |
+| 195–215 | (Reserved)               | TBD        | Future ML, macro, alternative data  |
+
+**Key uses:**
+
+- **LSTM/GRU/Transformer:** 60-day OHLCV + technicals (existing) + realized_volatility, return_1d/3d/10d, volume_zscore, days_since_earnings.
+- **XGBoost/LightGBM:** 100+ features from existing 160 + price_vs_sma, momentum_rank_sector, volatility_percentile, analyst_rating_consensus, earnings_surprise_pct.
+- **Backtest strategies:** SMA crossover, RSI, MACD, Bollinger, Momentum use existing OHLCV + technicals; extended: stoch_k/d, cci_20, williams_r, cmf, macd_histogram.
+- **AI/LLM analysis:** Fundamentals + news_sentiment + analyst_rating_consensus + target_price_consensus + qualitative (moat, management, disruption).
+- **Risk (GARCH, VaR):** daily_return_pct, realized_volatility_10d/20d, volatility_percentile_1y.
+
+---
+
+## Part 5 — Primary Data Sources Summary
+
+| Source           | Data Provided                    | Approx. Fields | Cost          | Method        |
+|------------------|----------------------------------|----------------|---------------|---------------|
+| **Screener.in**  | Fundamentals, ratios, 10yr, peers| 60+            | Free / ₹4k/yr | Scrape / Export |
+| **NSE Bhavcopy** | EOD OHLCV, delivery               | 15             | Free          | CSV Download   |
+| **BSE Filings**  | Shareholding, corp actions       | 15             | Free          | Scrape / API   |
+| **Trendlyne**    | FII/DII, pledging, forward PE     | 8              | Free (limited)| Scrape         |
+| **yfinance**     | Adjusted close, backup prices    | 10             | Free          | API            |
+| **DHAN/Broker**  | LTP, OHLC, quote, historical      | 41             | Free (data plan) | REST API    |
+| **RSS Feeds**    | News (Moneycontrol, ET, BS)      | 4              | Free          | RSS            |
+| **Rating Agencies** | Credit ratings (CRISIL etc.)   | 3              | Free          | Scrape         |
+| **pandas-ta / Custom** | Technicals, derived, ML features | 15+ extended | Free       | Calculated     |
+
+---
+
+## Part 6 — Scheduling Checklist (Pipeline Manager)
+
+- **CONTINUOUS:** field_availability, field_last_updated, multi_source_values (on every write).
+- **REAL_TIME:** News/sentiment (every 1–5 min); LTP/depth if broker API (every 1 min during market).
+- **DAILY (post market):** Bhavcopy → OHLCV; then derived metrics, technicals, valuations; then extended daily ML (volatility, momentum, extra technicals).
+- **WEEKLY:** Sector/industry peer averages (Screener or internal rollup).
+- **QUARTERLY:** Income statement, ratios, shareholding, earnings surprise, analyst consensus (after results).
+- **ANNUAL:** Balance sheet, cash flow, annual ratios, 5y CAGRs, 5y ROE, 3y FCF.
+- **ON_EVENT:** Corporate actions, next_earnings_date, pending_events, stock_status, SEBI; qualitative when updated.
+- **ONCE/NEVER:** Stock master (symbol, isin, sector, industry, listing_date, etc.) on listing or change.
+
+---
+
+---
+
+## Inclusion checklist (System objectives & data by frequency)
+
+All parameters from the **System Objectives and Methodology** and **Data Parameters by Frequency** spec are included in this document:
+
+| Your section | In this doc | Parameters covered |
+|--------------|-------------|--------------------|
+| **1. System objectives** (Data / Analysis / AI / Strategy) | § 1. System Objectives and Methodology | 4 layers: Multi-source ingestion, 200+ ratios + NLP, LSTM/XGBoost/Transformers, HRP & factor-based ranking |
+| **2.1 Continuous / Real-time** (Live market, News & sentiment, System health) | § 2.2 CONTINUOUS / REAL-TIME | LTP, bid-ask, order book depth, tick volume; news, sentiment polarity, social/forum; API latency, ingestion rate, model inference time |
+| **2.2 Hourly** (Intraday technicals, Market breadth) | § 2.3 HOURLY / PERIODIC | Hourly RSI, MACD crossovers, VWAP intraday; Advance-Decline ratio, Sectoral heatmap, India VIX |
+| **2.3 Daily** (Price/volume, Technicals, Valuation, Market indicators) | § 2.4 DAILY | OHLCV, delivery, VWAP; SMA/EMA, Bollinger, ATR, ADX, **Ichimoku Cloud**; P/E, P/B, EV/EBITDA, market cap, div yield; Nifty 50, **FII/DII net activity**, **S&P 500, Nasdaq** |
+| **2.4 Weekly** (Trend analysis, Alternative data) | § 2.5 WEEKLY | Weekly MA crossovers, Support/Resistance (weekly); **Google Trends**, **Job postings growth** |
+| **2.5 Monthly** (Macro, Commodity) | § 2.6 MONTHLY | **CPI, IIP, RBI Repo Rate, USD/INR**; **Crude (Brent), Gold, Steel, Copper** |
+| **2.6 Quarterly** (Income, Shareholding, Management) | § 2.7 QUARTERLY | Income statement, EBITDA, EPS, interest coverage; Promoter/FII/DII, pledging, shareholders; **Concall transcripts**, **Management guidance sentiment score** |
+| **2.7 Yearly / Once** (Master, Balance sheet, Qualitative moat) | § 2.8 ANNUAL, § 2.10 YEARLY/ONCE | Company name, ISIN, sector, industry, listing date, face value; Total assets, debt, share capital, reserves; **Competitive advantage**, **Regulatory risk assessment** |
+
+---
+
+*This document specifies all 160 core + extended data parameters (including objectives and frequency-based layout) for StockPulse. Use it as the single reference for the offline loader and extraction pipeline, and for feeding strategies, ML models, analysis, and prediction.*
