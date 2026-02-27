@@ -112,3 +112,4 @@ frontend/.env
 # Environment files
 *.env
 *.env.*
+.env

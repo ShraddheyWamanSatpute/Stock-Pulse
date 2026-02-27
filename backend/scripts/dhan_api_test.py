@@ -10,8 +10,8 @@ Usage:
   python scripts/dhan_api_test.py
 
   # Option B: OAuth with API key/secret (need Dhan Client ID for Step 1)
-  export DHAN_API_KEY="<your Dhan API key>"
-  export DHAN_API_SECRET="<your Dhan API secret>"
+  export DHAN_API_KEY=c3f73cb5
+  export DHAN_API_SECRET=7730987a-4618-4c3c-956b-23be7784fca0
   export DHAN_CLIENT_ID="<your dhan client id from web.dhan.co>"
   python scripts/dhan_api_test.py   # Step 1: prints login URL
   # After browser login, get tokenId from redirect URL and:
@@ -26,7 +26,10 @@ from collections import OrderedDict
 from datetime import datetime, timedelta
 from typing import Any
 
+from dotenv import load_dotenv
 import requests
+
+load_dotenv()
 
 # Base URLs
 AUTH_BASE = "https://auth.dhan.co"
