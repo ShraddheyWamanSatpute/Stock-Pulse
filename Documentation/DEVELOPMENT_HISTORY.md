@@ -1,7 +1,7 @@
 # StockPulse - Complete Development History
 
-> **Document Version**: 3.0
-> **Last Updated**: February 25, 2026
+> **Document Version**: 4.0
+> **Last Updated**: March 5, 2026
 > **Platform**: Indian Stock Market Analysis Platform (NSE/BSE)
 > **Repository**: [github.com/ShraddheyWamanSatpute/Stock-Pulse](https://github.com/ShraddheyWamanSatpute/Stock-Pulse)
 > **Active PR**: [#1 - Hybrid Database Architecture + Pipeline Fixes](https://github.com/ShraddheyWamanSatpute/Stock-Pulse/pull/1)
@@ -22,6 +22,7 @@
 10. [Testing & Quality Assurance](#10-testing--quality-assurance)
 11. [Known Issues & Next Steps](#11-known-issues--next-steps)
 12. [Related Documentation](#12-related-documentation)
+13. [Current Status Summary](#13-current-status-summary)
 
 ---
 
@@ -138,6 +139,19 @@ StockPulse is a comprehensive personal stock analysis platform designed for Indi
 - Documented anti-bot handling for NSE, BSE, Screener.in, Trendlyne
 - Identified free broker APIs (Dhan, Angel One, Fyers, Breeze) for real-time data
 - Provided cost analysis showing Rs 0/month is achievable for full pipeline
+
+### Phase 8: MongoDB Operations & Database Dashboard (v3.1)
+- Implemented MongoDB production-hardening patterns in code (timeouts, pooling, health checks, indexes at startup)
+- Introduced environment-aware MongoDB connection policy:
+  - In **development/local**: `MONGO_URL` defaults to `mongodb://localhost:27017` for single-user local use
+  - In **production**: `MONGO_URL` is required and must not point to localhost; app fails fast if Mongo is unreachable
+- Configured **majority write concern** (`w="majority", j=true`) for critical MongoDB collections (`watchlist`, `portfolio`, `news_articles`, `backtest_results`, `alerts`, `pipeline_jobs`, `stock_data`) and wired `MongoDBStore` to reuse these app-level collections
+- Extended `/api/database/health` to optionally include MongoDB **replica set status** (set name, member states, optime) when connected to a replica set (future production use)
+- Added MongoDB backup script with rotation and JSON fallback (`backend/scripts/backup_mongodb.py`)
+- Introduced Database Dashboard backend (`DatabaseDashboardService` + `/database` router) for collections/tables overview, activity, errors, settings, and size history
+- Added query playground (MongoDB & PostgreSQL read-only queries), export endpoints, and audit logging
+- Added WebSocket-powered dashboard pulse (`/ws/dashboard`) that streams live DB metrics (Mongo, Redis, PostgreSQL)
+- Documented MongoDB production checklist and runbooks for future hosted/replica-set deployment (not required for current local-only use)
 
 ---
 
@@ -415,6 +429,47 @@ Database Setup Script (`backend/setup_databases.py`):
 
 **Files created:**
 - `Documentation/Data_Sources_and_Extraction_Guide.md`
+
+---
+
+### Session 8 - MongoDB Ops & Database Dashboard (v3.1)
+
+**Key commits:**
+- `0ead30c` - "feat: MongoDB production-ready hardening - security, validation, backups"
+- `69fbf00` - "feat: add comprehensive Database Dashboard for monitoring & management"
+- `9fc8cd5` - "feat: complete Database Dashboard gap fixes - CRUD, charts, filters, docs"
+- `82867c9` - "feat: add Query Playground, Tools, Help Panel, Export, WebSocket, and theme toggle"
+- `342aa25` - "Merge pull request #9 from ShraddheyWamanSatpute/claude/mongodb-production-ready-0AkeH"
+
+**What was built:**
+- MongoDB hardening in the backend:
+  - Timeouts, connection pooling, `serverSelectionTimeoutMS` and `socketTimeoutMS` tuned
+  - Centralized index creation at startup for all 10 MongoDB collections
+  - Environment-aware connection policy: production requires non-localhost `MONGO_URL` and fails fast if Mongo is down; development keeps using local Mongo with graceful logging
+  - Majority write concern configured for high-value collections, ensuring durable writes once a replica set is used
+  - Health checks (`/api/database/health`) now enumerate collections, document counts, and (when available) replica set status (set name, member states, optime)
+  - Backup script `backend/scripts/backup_mongodb.py` with mongodump + JSON fallback and rotation
+- Database Dashboard (backend):
+  - `/database/overview` - aggregated view of MongoDB, PostgreSQL, and Redis usage
+  - `/database/collections`, `/database/tables`, `/database/redis/keys` - introspection endpoints
+  - `/database/activity`, `/database/errors`, `/database/errors/trend` - activity and error feeds
+  - `/database/settings` - dashboard configuration (safe mode, thresholds, refresh interval)
+  - `/database/audit-log` - structured audit trail for admin operations
+  - `/database/backup` - API trigger for MongoDB backup script
+  - `/database/query/mongodb` and `/database/query/postgresql` - **read-only** query playground
+- Database Dashboard (frontend, `DatabaseDashboard.jsx`):
+  - Live overview cards for MongoDB/Redis/PostgreSQL status and sizes
+  - Collections/tables browser with sampling and inferred schema view
+  - Activity & error timeline, error trend charts
+  - Safe-mode bulk delete, export (JSON/CSV), and audit-log viewer
+  - Tools/help panel explaining how the dashboard maps to the hybrid database architecture
+- Observability:
+  - WebSocket endpoint `/ws/dashboard` streams periodic DB metrics (collection counts, error counts, Redis keys, PG rows)
+  - Health endpoint extended to include MongoDB replica-set info when connected to a replica set (future production)
+
+**Notes for current phase:**
+- All MongoDB production/replica-set features are implemented in a way that **default to local single-node usage** (your current setup).
+- Additional MongoDB documents (`MongoDB_Production_Checklist.md`, `MongoDB_Runbooks.md`) capture future hosted/99.9% SLA guidance without changing current local flow.
 
 ---
 
@@ -786,7 +841,46 @@ Groww API -> GrowwAPIExtractor -> _transform_quote_data()
 | `f65cf5a` | Merge branch 'main' into claude/agitated-edison | Merge |
 | `0a4f70b` | fix: Database setup rewrite, server cleanup, and Groww pipeline fixes | Session 6 |
 | `d9b9b30` | docs: Add comprehensive data sources & extraction guide for all 160 fields | Session 7 |
+| `0ead30c` | feat: MongoDB production-ready hardening - security, validation, backups | Session 8 |
+| `69fbf00` | feat: add comprehensive Database Dashboard for monitoring & management | Session 8 |
+| `9fc8cd5` | feat: complete Database Dashboard gap fixes - CRUD, charts, filters, docs | Session 8 |
+| `82867c9` | feat: add Query Playground, Tools, Help Panel, Export, WebSocket, and theme toggle | Session 8 |
+| `342aa25` | Merge pull request #9 from ShraddheyWamanSatpute/claude/mongodb-production-ready-0AkeH | Merge |
 
 ---
 
-*Document maintained as part of StockPulse development history. Last updated: February 25, 2026.*
+*Document maintained as part of StockPulse development history. Last updated: March 5, 2026.*
+
+---
+
+## 13. Current Status Summary
+
+As of **March 2026**, the StockPulse system is in a strong **advanced-prototype** state, optimized for **local single-user use** with a clear path to future production deployment:
+
+- **Frontend**
+  - React SPA with 8 main pages: Dashboard, Stock Analyzer, Screener, Watchlist, Portfolio, News Hub, Reports, and Data Pipeline.
+  - UI built with Tailwind + shadcn/ui; charts and scorecards wired to backend APIs (mock data by default, live data when pipeline + DBs are configured).
+  - Database Dashboard UI (admin view) is available for future use once the backend dashboard API is enabled in your environment.
+
+- **Backend & APIs**
+  - FastAPI server exposes full feature set:
+    - Stock analysis, screening, watchlist, portfolio, alerts, backtesting, PDF reports, and AI insights.
+    - Extraction & Groww pipeline APIs, including scheduler and metrics.
+    - Comprehensive `/api/database/health` and `/database/*` endpoints for database monitoring and admin.
+  - For your current workflow, the system works fully with:
+    - **Local MongoDB** (single node, localhost)
+    - **Optional local Redis** (for caching) and **optional local PostgreSQL** (for time-series + screener). If they are not running, the app degrades gracefully to mock data and Mongo-only flows.
+
+- **Databases**
+  - **MongoDB**: Primary store for user data (watchlist, portfolio, alerts), pipeline jobs, extraction logs, quality reports, news, and backtest results. Indexes, backup script, and safety utilities are implemented and used.
+  - **Redis**: Integrated cache layer for prices, analysis, pipeline status, and screener results; falls back to in-memory cache if Redis is not available.
+  - **PostgreSQL**: Time-series + analytics layer implemented and wired for OHLCV, technicals, fundamentals, screener, and Bhavcopy ingestion; can be enabled when you run Postgres locally.
+  - MongoDB configuration is **environment-aware**:
+    - In your current **development/local** setup, `ENVIRONMENT` defaults to `development` and `MONGO_URL` safely defaults to `mongodb://localhost:27017`
+    - In a future **production** setup, `MONGO_URL` will be required, must not use localhost, and the app will fail fast if Mongo is unreachable
+  - Critical MongoDB collections are already configured with **majority write concern** (`w="majority", j=true`) and replica set health reporting is wired into `/api/database/health`, ready to be used when you move to a replica set.
+  - All **production/replica-set guidance for MongoDB** is documented (checklist + runbooks) but **not required** in your current local-only setup.
+
+- **Operations & Docs**
+  - Detailed technical/functional documentation exists for architecture, databases, scoring, extraction, and data sources.
+  - MongoDB production checklist and runbooks are ready for a future phase when you decide to host the system for other users or on cloud, without impacting the current local workflow.

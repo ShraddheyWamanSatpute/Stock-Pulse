@@ -2,6 +2,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Query, WebSocket, WebSock
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import WriteConcern
 import os
 import logging
 from pathlib import Path
@@ -61,7 +62,16 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection with production-grade settings
-mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
+_env = os.environ.get('ENVIRONMENT', 'development').lower()
+_default_mongo = 'mongodb://localhost:27017'
+mongo_url = os.environ.get('MONGO_URL', _default_mongo)
+if _env == 'production':
+    if not mongo_url or mongo_url.strip() == '':
+        logger.critical("MONGO_URL must be set in production")
+        raise SystemExit(1)
+    if 'localhost' in mongo_url or '127.0.0.1' in mongo_url:
+        logger.critical("MONGO_URL must not point at localhost in production")
+        raise SystemExit(1)
 db_name = os.environ.get('MONGO_DB_NAME', os.environ.get('DB_NAME', 'stockpulse'))
 client = AsyncIOMotorClient(
     mongo_url,
@@ -74,6 +84,17 @@ client = AsyncIOMotorClient(
     retryReads=True,
 )
 db = client[db_name]
+
+# Critical collections: majority write concern for durability on replica set (99.9% SLA)
+# Writes are acknowledged only after replicated to a majority; journaled for crash safety.
+_CRITICAL_WC = WriteConcern(w="majority", j=True)
+db.watchlist = db.get_collection("watchlist", write_concern=_CRITICAL_WC)
+db.portfolio = db.get_collection("portfolio", write_concern=_CRITICAL_WC)
+db.news_articles = db.get_collection("news_articles", write_concern=_CRITICAL_WC)
+db.backtest_results = db.get_collection("backtest_results", write_concern=_CRITICAL_WC)
+db.alerts = db.get_collection("alerts", write_concern=_CRITICAL_WC)
+db.pipeline_jobs = db.get_collection("pipeline_jobs", write_concern=_CRITICAL_WC)
+db.stock_data = db.get_collection("stock_data", write_concern=_CRITICAL_WC)
 
 # Redis connection
 redis_url = os.environ.get('REDIS_URL', 'redis://localhost:6379')
@@ -285,12 +306,32 @@ async def database_health_check():
         for coll_name in sorted(collections):
             count = await db[coll_name].count_documents({})
             coll_stats[coll_name] = {"documents": count}
-        health["mongodb"] = {
+        mongo_health = {
             "status": "connected",
             "database": db_name,
             "collections_count": len(collections),
             "collections": coll_stats,
         }
+        # Replica set status (only when connected to a replica set)
+        try:
+            rs_status = await client.admin.command("replSetGetStatus")
+            members = []
+            for m in rs_status.get("members", []):
+                optime = m.get("optimeDate")
+                members.append({
+                    "name": m.get("name"),
+                    "stateStr": m.get("stateStr"),
+                    "health": m.get("health"),
+                    "optimeDate": getattr(optime, "isoformat", lambda: str(optime))() if optime else None,
+                })
+            mongo_health["replica_set"] = {
+                "set": rs_status.get("set"),
+                "myState": rs_status.get("myState"),
+                "members": members,
+            }
+        except Exception:
+            pass  # Standalone or not a replica set
+        health["mongodb"] = mongo_health
     except Exception as e:
         health["mongodb"] = {"status": "error", "error": str(e)}
 
@@ -2550,6 +2591,9 @@ async def startup_event():
         logger.info(f"MongoDB connected: version {server_info.get('version', 'unknown')}")
     except Exception as e:
         logger.error(f"MongoDB connection failed: {e}")
+        if os.environ.get("ENVIRONMENT", "development").lower() == "production":
+            logger.critical("Production: exiting because MongoDB is unreachable (fail-fast).")
+            raise SystemExit(1)
         logger.error("Server will start but database operations will fail!")
 
     # Initialize Database Dashboard service

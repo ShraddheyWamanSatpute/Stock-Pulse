@@ -38,11 +38,12 @@ class MongoDBStore:
             db: AsyncIOMotorDatabase instance
         """
         self.db = db
-        self.stock_data = db["stock_data"]
+        # Use app-level collections when set (majority write concern for 99.9% SLA)
+        self.stock_data = getattr(db, "stock_data", db["stock_data"])
+        self.pipeline_jobs = getattr(db, "pipeline_jobs", db["pipeline_jobs"])
         self.price_history = db["price_history"]
         self.extraction_log = db["extraction_log"]
         self.quality_reports = db["quality_reports"]
-        self.pipeline_jobs = db["pipeline_jobs"]
 
     async def ensure_indexes(self) -> None:
         """Create necessary indexes for efficient querying."""
