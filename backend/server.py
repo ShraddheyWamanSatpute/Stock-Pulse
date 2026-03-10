@@ -574,6 +574,60 @@ async def get_timeseries_shareholding(
     return {"symbol": symbol.upper(), "count": len(data), "data": data}
 
 
+# ==================== TIMESERIES JOBS (macro, derivatives, intraday) ====================
+@api_router.post("/jobs/run/macro-indicators")
+async def run_macro_indicators_job(days: int = Query(default=90, le=365)):
+    """Trigger macro indicators job: fetch USD/INR, commodities (yfinance) and optional RBI data, upsert to PostgreSQL."""
+    if not _ts_store:
+        raise HTTPException(status_code=503, detail="Time-series store not available")
+    try:
+        from jobs.macro_indicators_job import run_macro_indicators_job as _run
+        count = await _run(_ts_store, days=days)
+        return {"job": "macro_indicators", "records_upserted": count}
+    except Exception as e:
+        logger.exception("Macro indicators job failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.post("/jobs/run/derivatives")
+async def run_derivatives_job(
+    date: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    days: Optional[int] = Query(default=None, description="Process last N days"),
+):
+    """Trigger derivatives job: NSE F&O bhavcopy or fallback from prices_daily, upsert to PostgreSQL."""
+    if not _ts_store:
+        raise HTTPException(status_code=503, detail="Time-series store not available")
+    try:
+        from jobs.derivatives_job import run_derivatives_job as _run
+        target_date = None
+        if date:
+            try:
+                target_date = datetime.strptime(date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+        count = await _run(_ts_store, target_date=target_date, days=days)
+        return {"job": "derivatives", "records_upserted": count}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Derivatives job failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.post("/jobs/run/intraday-metrics")
+async def run_intraday_metrics_job(days: int = Query(default=1, le=30)):
+    """Trigger intraday metrics job: build EOD snapshots from daily technicals/prices, upsert to PostgreSQL."""
+    if not _ts_store:
+        raise HTTPException(status_code=503, detail="Time-series store not available")
+    try:
+        from jobs.intraday_metrics_job import run_intraday_metrics_job as _run
+        count = await _run(_ts_store, days=days)
+        return {"job": "intraday_metrics", "records_upserted": count}
+    except Exception as e:
+        logger.exception("Intraday metrics job failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ==================== MARKET OVERVIEW ====================
 @api_router.get("/market/overview")
 async def get_market_overview():
