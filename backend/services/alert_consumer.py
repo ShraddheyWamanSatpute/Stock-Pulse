@@ -25,8 +25,13 @@ logger = logging.getLogger(__name__)
 _consumer_task: Optional[asyncio.Task] = None
 _running = False
 
-ALERT_QUEUE_KEY = "alert_queue"
 BLPOP_TIMEOUT = 5  # seconds to wait per BLPOP cycle
+
+
+def _get_alert_queue_key() -> str:
+    """Get the namespaced alert_queue key."""
+    prefix = os.environ.get("REDIS_KEY_PREFIX", "stockpulse:")
+    return f"{prefix}alert_queue"
 
 
 async def _consume_alerts():
@@ -60,7 +65,7 @@ async def _consume_alerts():
         try:
             # BLPOP blocks until an item is available or timeout expires
             result = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: r.blpop(ALERT_QUEUE_KEY, timeout=BLPOP_TIMEOUT)
+                None, lambda: r.blpop(_get_alert_queue_key(), timeout=BLPOP_TIMEOUT)
             )
             if result is None:
                 # Timeout, no alert — loop again

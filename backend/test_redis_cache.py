@@ -192,13 +192,15 @@ def test_cache_service_redis():
     # Alert queue with LTRIM cap
     for i in range(5):
         svc.publish_alert({"alert_id": i, "msg": f"test alert {i}"})
-    # Verify queue exists and is capped
+    # Verify queue exists and is capped (use namespaced key)
     import redis
+    from services.cache_service import KEY_PREFIX
     r = redis.Redis.from_url(redis_url, decode_responses=True)
-    qlen = r.llen("alert_queue")
+    alert_key = f"{KEY_PREFIX}alert_queue"
+    qlen = r.llen(alert_key)
     assert_true("alert queue has entries", qlen > 0)
     assert_true("alert queue capped", qlen <= ALERT_QUEUE_MAX_LENGTH)
-    r.delete("alert_queue")
+    r.delete(alert_key)
     r.close()
 
     # Dashboard helper: scan_keys

@@ -28,7 +28,10 @@ PIPELINE_CACHE_TTL = 30     # 30 seconds for pipeline status
 NEWS_CACHE_TTL = 180        # 3 minutes for news items
 DEFAULT_CACHE_TTL = 120     # 2 minutes default
 
-# Cache key prefixes
+# Configurable namespace prefix for key isolation (e.g. "stockpulse:" or "" for none)
+KEY_PREFIX = os.environ.get("REDIS_KEY_PREFIX", "stockpulse:")
+
+# Cache key prefixes (combined with KEY_PREFIX at runtime)
 PREFIX_PRICE = "price:"
 PREFIX_ANALYSIS = "analysis:"
 PREFIX_STOCK = "stock:"
@@ -117,10 +120,12 @@ class CacheService:
 
     def __init__(self, redis_url: str = "redis://localhost:6379", db: int = 0):
         self._redis = None
+        self._pool = None
         self._redis_available = False
         self._fallback_cache = _LRUFallbackCache(max_keys=FALLBACK_MAX_KEYS)
         self._redis_url = redis_url
         self._db = db
+        self._key_prefix = KEY_PREFIX
         self._stats = {
             "hits": 0,
             "misses": 0,
@@ -141,7 +146,7 @@ class CacheService:
         for attempt in range(1, max_retries + 1):
             try:
                 import redis as redis_lib
-                pool = redis_lib.ConnectionPool.from_url(
+                self._pool = redis_lib.ConnectionPool.from_url(
                     self._redis_url,
                     db=self._db,
                     decode_responses=True,
@@ -150,7 +155,7 @@ class CacheService:
                     retry_on_timeout=True,
                     max_connections=self._max_connections,
                 )
-                self._redis = redis_lib.Redis(connection_pool=pool)
+                self._redis = redis_lib.Redis(connection_pool=self._pool)
                 # Test connection
                 self._redis.ping()
                 self._redis_available = True
@@ -191,11 +196,22 @@ class CacheService:
     def is_redis_available(self) -> bool:
         return self._redis_available
 
+    def get_connection_pool(self):
+        """Return the underlying ConnectionPool for sharing with other components (e.g. PriceBroadcaster)."""
+        return self._pool
+
+    def _key(self, key: str) -> str:
+        """Apply the namespace prefix to a cache key."""
+        if self._key_prefix and not key.startswith(self._key_prefix):
+            return f"{self._key_prefix}{key}"
+        return key
+
     def get(self, key: str) -> Optional[Any]:
         """Get a value from cache. Returns None on miss."""
+        full_key = self._key(key)
         try:
             if self._redis_available:
-                data = self._redis.get(key)
+                data = self._redis.get(full_key)
                 if data is not None:
                     self._stats["hits"] += 1
                     return json.loads(data)
@@ -203,7 +219,7 @@ class CacheService:
                 return None
             else:
                 # Fallback: bounded in-memory cache with TTL
-                result = self._fallback_cache.get(key)
+                result = self._fallback_cache.get(full_key)
                 if result is not None:
                     self._stats["hits"] += 1
                     return result
@@ -211,7 +227,7 @@ class CacheService:
                 return None
         except Exception as e:
             self._stats["errors"] += 1
-            logger.debug(f"Cache get error for {key}: {e}")
+            logger.debug(f"Cache get error for {full_key}: {e}")
             # Try reconnect on failure, fall through to None
             if self._redis_available:
                 self._redis_available = False
@@ -220,17 +236,18 @@ class CacheService:
 
     def set(self, key: str, value: Any, ttl: int = DEFAULT_CACHE_TTL) -> bool:
         """Set a value in cache with TTL (seconds). Returns True on success."""
+        full_key = self._key(key)
         try:
             serialized = json.dumps(value, default=str)
             if self._redis_available:
-                self._redis.setex(key, ttl, serialized)
+                self._redis.setex(full_key, ttl, serialized)
             else:
-                self._fallback_cache.set(key, value, ttl)
+                self._fallback_cache.set(full_key, value, ttl)
             self._stats["sets"] += 1
             return True
         except Exception as e:
             self._stats["errors"] += 1
-            logger.debug(f"Cache set error for {key}: {e}")
+            logger.debug(f"Cache set error for {full_key}: {e}")
             if self._redis_available:
                 self._redis_available = False
                 self._try_reconnect()
@@ -238,33 +255,35 @@ class CacheService:
 
     def delete(self, key: str) -> bool:
         """Delete a key from cache."""
+        full_key = self._key(key)
         try:
             if self._redis_available:
-                self._redis.delete(key)
+                self._redis.delete(full_key)
             else:
-                self._fallback_cache.delete(key)
+                self._fallback_cache.delete(full_key)
             return True
         except Exception as e:
-            logger.debug(f"Cache delete error for {key}: {e}")
+            logger.debug(f"Cache delete error for {full_key}: {e}")
             return False
 
     def delete_pattern(self, pattern: str) -> int:
         """Delete all keys matching a pattern using SCAN (not KEYS). Returns count deleted."""
+        full_pattern = self._key(pattern)
         try:
             if self._redis_available:
                 deleted = 0
                 cursor = 0
                 while True:
-                    cursor, keys = self._redis.scan(cursor=cursor, match=pattern, count=100)
+                    cursor, keys = self._redis.scan(cursor=cursor, match=full_pattern, count=100)
                     if keys:
                         deleted += self._redis.delete(*keys)
                     if cursor == 0:
                         break
                 return deleted
             else:
-                return self._fallback_cache.match_delete(pattern)
+                return self._fallback_cache.match_delete(full_pattern)
         except Exception as e:
-            logger.debug(f"Cache delete_pattern error for {pattern}: {e}")
+            logger.debug(f"Cache delete_pattern error for {full_pattern}: {e}")
             return 0
 
     # ========================
@@ -358,7 +377,7 @@ class CacheService:
         """Store individual stock fields as a Redis HASH (enables partial reads)."""
         try:
             if self._redis_available:
-                key = f"stock:{symbol}"
+                key = self._key(f"stock:{symbol}")
                 # Convert all values to strings for Redis HASH
                 str_fields = {k: json.dumps(v, default=str) for k, v in fields.items()}
                 self._redis.hset(key, mapping=str_fields)
@@ -375,7 +394,7 @@ class CacheService:
         """Get all fields from a stock's HASH."""
         try:
             if self._redis_available:
-                data = self._redis.hgetall(f"stock:{symbol}")
+                data = self._redis.hgetall(self._key(f"stock:{symbol}"))
                 if data:
                     self._stats["hits"] += 1
                     return {k: json.loads(v) for k, v in data.items()}
@@ -389,7 +408,7 @@ class CacheService:
         """Get a single field from a stock's HASH (e.g., just the price)."""
         try:
             if self._redis_available:
-                data = self._redis.hget(f"stock:{symbol}", field)
+                data = self._redis.hget(self._key(f"stock:{symbol}"), field)
                 if data:
                     self._stats["hits"] += 1
                     return json.loads(data)
@@ -403,7 +422,7 @@ class CacheService:
         """Get multiple fields from a stock's HASH."""
         try:
             if self._redis_available:
-                values = self._redis.hmget(f"stock:{symbol}", fields)
+                values = self._redis.hmget(self._key(f"stock:{symbol}"), fields)
                 result = {}
                 for f, v in zip(fields, values):
                     if v is not None:
@@ -431,13 +450,15 @@ class CacheService:
         """
         try:
             if self._redis_available:
+                gk = self._key("top_gainers")
+                lk = self._key("top_losers")
                 if gainers:
-                    self._redis.zadd("top_gainers", gainers)
-                    self._redis.expire("top_gainers", PRICE_CACHE_TTL)
+                    self._redis.zadd(gk, gainers)
+                    self._redis.expire(gk, PRICE_CACHE_TTL)
                 if losers:
                     # Store as positive values, sorted ascending → worst first
-                    self._redis.zadd("top_losers", {k: abs(v) for k, v in losers.items()})
-                    self._redis.expire("top_losers", PRICE_CACHE_TTL)
+                    self._redis.zadd(lk, {k: abs(v) for k, v in losers.items()})
+                    self._redis.expire(lk, PRICE_CACHE_TTL)
                 return True
             return False
         except Exception as e:
@@ -448,7 +469,7 @@ class CacheService:
         """Get top N gainers from SORTED SET (highest change % first)."""
         try:
             if self._redis_available:
-                results = self._redis.zrevrange("top_gainers", 0, count - 1, withscores=True)
+                results = self._redis.zrevrange(self._key("top_gainers"), 0, count - 1, withscores=True)
                 return [{"symbol": sym, "change_pct": score} for sym, score in results]
             return []
         except Exception:
@@ -458,7 +479,7 @@ class CacheService:
         """Get top N losers from SORTED SET (biggest loss first)."""
         try:
             if self._redis_available:
-                results = self._redis.zrevrange("top_losers", 0, count - 1, withscores=True)
+                results = self._redis.zrevrange(self._key("top_losers"), 0, count - 1, withscores=True)
                 return [{"symbol": sym, "change_pct": -score} for sym, score in results]
             return []
         except Exception:
@@ -472,7 +493,7 @@ class CacheService:
         """Publish a price update to the Redis PUB/SUB channel."""
         try:
             if self._redis_available:
-                channel = f"channel:prices"
+                channel = self._key("channel:prices")
                 payload = json.dumps({"symbol": symbol, **price_data}, default=str)
                 self._redis.publish(channel, payload)
                 return True
@@ -486,10 +507,11 @@ class CacheService:
         Caps the queue at ALERT_QUEUE_MAX_LENGTH to prevent unbounded growth."""
         try:
             if self._redis_available:
+                queue_key = self._key("alert_queue")
                 payload = json.dumps(alert_data, default=str)
                 pipe = self._redis.pipeline()
-                pipe.rpush("alert_queue", payload)
-                pipe.ltrim("alert_queue", -ALERT_QUEUE_MAX_LENGTH, -1)
+                pipe.rpush(queue_key, payload)
+                pipe.ltrim(queue_key, -ALERT_QUEUE_MAX_LENGTH, -1)
                 pipe.execute()
                 return True
             return False
@@ -592,6 +614,7 @@ class CacheService:
 
 # Module-level singleton
 _cache_service: Optional[CacheService] = None
+_health_check_task = None
 
 
 def init_cache_service(redis_url: str = "redis://localhost:6379") -> CacheService:
@@ -605,3 +628,49 @@ def init_cache_service(redis_url: str = "redis://localhost:6379") -> CacheServic
 def get_cache_service() -> Optional[CacheService]:
     """Get the global cache service instance."""
     return _cache_service
+
+
+async def start_health_check(interval: int = 60):
+    """Start a periodic Redis health check that pings every `interval` seconds
+    and attempts reconnection if Redis was lost."""
+    import asyncio
+
+    global _health_check_task
+
+    async def _loop():
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                svc = get_cache_service()
+                if svc is None:
+                    continue
+                if svc._redis is not None:
+                    try:
+                        svc._redis.ping()
+                        if not svc._redis_available:
+                            svc._redis_available = True
+                            logger.info("Redis health check: reconnected")
+                    except Exception:
+                        if svc._redis_available:
+                            svc._redis_available = False
+                            logger.warning("Redis health check: connection lost, using fallback")
+                        svc._try_reconnect()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug(f"Redis health check error: {e}")
+
+    _health_check_task = asyncio.get_event_loop().create_task(_loop())
+    logger.info(f"Redis health check started (every {interval}s)")
+
+
+async def stop_health_check():
+    """Stop the periodic Redis health check."""
+    global _health_check_task
+    if _health_check_task is not None:
+        _health_check_task.cancel()
+        try:
+            await _health_check_task
+        except Exception:
+            pass
+        _health_check_task = None

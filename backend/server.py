@@ -36,7 +36,7 @@ from services.mock_data import (
 )
 from services.scoring_engine import generate_analysis, generate_ml_prediction
 from services.llm_service import generate_stock_insight, summarize_news
-from services.cache_service import init_cache_service, get_cache_service, CacheService
+from services.cache_service import init_cache_service, get_cache_service, CacheService, start_health_check, stop_health_check
 from services.alert_consumer import start_alert_consumer, stop_alert_consumer
 from services.timeseries_store import init_timeseries_store, get_timeseries_store, TimeSeriesStore
 
@@ -2909,6 +2909,12 @@ async def startup_event():
         except Exception as e:
             logger.warning(f"Alert consumer start warning: {e}")
 
+    # Start periodic Redis health check (ping every 60s, reconnect if lost)
+    try:
+        await start_health_check(interval=60)
+    except Exception as e:
+        logger.debug(f"Redis health check start: {e}")
+
     logger.info("StockPulse API ready!")
 
 
@@ -2933,9 +2939,13 @@ async def shutdown_event():
         except Exception as e:
             logger.error(f"Error stopping pipeline service: {e}")
     
-    # Stop alert consumer
+    # Stop alert consumer and health check
     try:
         await stop_alert_consumer()
+    except Exception:
+        pass
+    try:
+        await stop_health_check()
     except Exception:
         pass
 
