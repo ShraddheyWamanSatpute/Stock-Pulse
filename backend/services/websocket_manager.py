@@ -175,9 +175,20 @@ class PriceBroadcaster:
     same price feed via Redis.
     """
 
-    REDIS_CHANNEL = "channel:prices"
-    REDIS_PRICE_PREFIX = "ws:price:"
     REDIS_PRICE_TTL = 10  # seconds
+
+    @staticmethod
+    def _redis_prefix() -> str:
+        import os
+        return os.environ.get("REDIS_KEY_PREFIX", "stockpulse:")
+
+    @classmethod
+    def _channel_key(cls) -> str:
+        return f"{cls._redis_prefix()}channel:prices"
+
+    @classmethod
+    def _price_key(cls, symbol: str) -> str:
+        return f"{cls._redis_prefix()}ws:price:{symbol}"
 
     def __init__(self, manager: ConnectionManager, fetch_interval: float = 5.0):
         self.manager = manager
@@ -188,19 +199,40 @@ class PriceBroadcaster:
         self._redis_available = False
 
     def _init_redis(self):
-        """Lazily initialise a Redis client for pub/sub."""
+        """Lazily initialise a Redis client for pub/sub.
+        Reuses the CacheService connection pool when available."""
         if self._redis is not None:
             return
         try:
             import redis as _redis_lib
             import os
-            url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-            self._redis = _redis_lib.Redis.from_url(
-                url, decode_responses=True, socket_connect_timeout=2, socket_timeout=1
-            )
+
+            # Try to reuse CacheService's connection pool
+            pool = None
+            try:
+                from services.cache_service import get_cache_service
+                cache_svc = get_cache_service()
+                if cache_svc and cache_svc.get_connection_pool():
+                    pool = cache_svc.get_connection_pool()
+            except Exception:
+                pass
+
+            if pool:
+                self._redis = _redis_lib.Redis(connection_pool=pool)
+            else:
+                url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+                connect_timeout = int(os.environ.get("REDIS_CONNECT_TIMEOUT", "5"))
+                socket_timeout = int(os.environ.get("REDIS_SOCKET_TIMEOUT", "5"))
+                self._redis = _redis_lib.Redis.from_url(
+                    url,
+                    decode_responses=True,
+                    socket_connect_timeout=connect_timeout,
+                    socket_timeout=socket_timeout,
+                )
             self._redis.ping()
             self._redis_available = True
-            logger.info("PriceBroadcaster: Redis pub/sub connected")
+            logger.info("PriceBroadcaster: Redis pub/sub connected" +
+                        (" (shared pool)" if pool else " (standalone)"))
         except Exception as e:
             logger.debug(f"PriceBroadcaster: Redis not available ({e}), pub/sub disabled")
             self._redis_available = False
@@ -263,13 +295,12 @@ class PriceBroadcaster:
             return
         try:
             # Publish aggregated update to the prices channel
-            self._redis.publish(self.REDIS_CHANNEL, json.dumps(prices, default=str))
+            self._redis.publish(self._channel_key(), json.dumps(prices, default=str))
 
             # Cache each symbol individually with short TTL
             pipe = self._redis.pipeline(transaction=False)
             for symbol, data in prices.items():
-                key = f"{self.REDIS_PRICE_PREFIX}{symbol}"
-                pipe.setex(key, self.REDIS_PRICE_TTL, json.dumps(data, default=str))
+                pipe.setex(self._price_key(symbol), self.REDIS_PRICE_TTL, json.dumps(data, default=str))
             pipe.execute()
         except Exception as e:
             logger.debug(f"Redis publish error: {e}")

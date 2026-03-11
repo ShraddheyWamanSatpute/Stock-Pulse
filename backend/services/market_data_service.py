@@ -22,10 +22,6 @@ HISTORICAL_CACHE_TTL = 3600  # 1 hour for historical data
 INDICES_CACHE_TTL = 60  # 1 minute for market indices
 FUNDAMENTALS_CACHE_TTL = 3600  # 1 hour for fundamentals
 
-# In-memory fallback (used only when Redis is unavailable)
-_price_cache: Dict[str, Dict] = {}
-_cache_timestamps: Dict[str, datetime] = {}
-
 # NSE stock symbols need .NS suffix for Yahoo Finance
 # BSE stock symbols need .BO suffix
 INDIAN_STOCK_SUFFIXES = {
@@ -102,26 +98,18 @@ def _get_cache():
 
 
 def _cache_get(key: str) -> Optional[Any]:
-    """Get from Redis (via CacheService) first, then in-memory fallback."""
+    """Get from CacheService (Redis with built-in LRU fallback)."""
     svc = _get_cache()
     if svc:
-        result = svc.get(key)
-        if result is not None:
-            return result
-    # In-memory fallback
-    if key in _cache_timestamps:
-        return _price_cache.get(key)
+        return svc.get(key)
     return None
 
 
 def _cache_set(key: str, value: Any, ttl: int) -> None:
-    """Set in Redis (via CacheService) and in-memory fallback."""
+    """Set via CacheService (Redis with built-in LRU fallback)."""
     svc = _get_cache()
     if svc:
         svc.set(key, value, ttl)
-    # Always keep in-memory copy as fallback
-    _price_cache[key] = value
-    _cache_timestamps[key] = datetime.now()
 
 
 def get_yahoo_symbol(symbol: str, exchange: str = "NSE") -> str:
@@ -137,14 +125,6 @@ def get_yahoo_symbol(symbol: str, exchange: str = "NSE") -> str:
     # Default: append NSE suffix
     suffix = INDIAN_STOCK_SUFFIXES.get(exchange, ".NS")
     return f"{symbol}{suffix}"
-
-
-def is_cache_valid(cache_key: str, ttl: int = CACHE_TTL_SECONDS) -> bool:
-    """Check if cached data is still valid (in-memory only check)."""
-    if cache_key not in _cache_timestamps:
-        return False
-    age = (datetime.now() - _cache_timestamps[cache_key]).total_seconds()
-    return age < ttl
 
 
 async def get_stock_quote(symbol: str, use_cache: bool = True) -> Optional[Dict[str, Any]]:
@@ -439,10 +419,7 @@ async def get_stock_financials(symbol: str) -> Optional[Dict[str, Any]]:
 
 
 def clear_cache():
-    """Clear all cached data (in-memory and Redis market keys)"""
-    global _price_cache, _cache_timestamps
-    _price_cache = {}
-    _cache_timestamps = {}
+    """Clear all cached market data from Redis."""
     svc = _get_cache()
     if svc:
         svc.delete_pattern("mkt:*")
