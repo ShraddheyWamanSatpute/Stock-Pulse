@@ -384,7 +384,12 @@ async def get_cache_stats():
 
 @api_router.delete("/cache/flush")
 async def flush_cache():
-    """Flush all cache entries (admin operation)"""
+    """Flush all cache entries (admin operation).
+    Blocked in production unless ALLOW_CACHE_FLUSH=true is set."""
+    env = os.environ.get("ENVIRONMENT", "development").lower()
+    allow_flush = os.environ.get("ALLOW_CACHE_FLUSH", "false").lower() == "true"
+    if env == "production" and not allow_flush:
+        return {"error": "Cache flush is disabled in production. Set ALLOW_CACHE_FLUSH=true to override."}
     if cache:
         cache.invalidate_all()
         return {"message": "Cache flushed successfully"}
