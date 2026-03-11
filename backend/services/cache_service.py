@@ -12,7 +12,10 @@ Falls back to in-memory caching if Redis is unavailable.
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+import os
+import time
+from collections import OrderedDict
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -34,20 +37,88 @@ PREFIX_PIPELINE = "pipeline:"
 PREFIX_NEWS = "news:"
 PREFIX_MARKET = "market:"
 
+# Alert queue constraints
+ALERT_QUEUE_MAX_LENGTH = 1000
+
+# In-memory fallback constraints
+FALLBACK_MAX_KEYS = int(os.environ.get("REDIS_FALLBACK_MAX_KEYS", "10000"))
+
+
+class _LRUFallbackCache:
+    """
+    Bounded in-memory cache with LRU eviction and TTL support.
+    Prevents unbounded memory growth when Redis is unavailable.
+    """
+
+    def __init__(self, max_keys: int = FALLBACK_MAX_KEYS):
+        self._store: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+        self._max_keys = max_keys
+
+    def get(self, key: str) -> Optional[Any]:
+        entry = self._store.get(key)
+        if entry is None:
+            return None
+        if time.time() > entry["expires_at"]:
+            del self._store[key]
+            return None
+        # Move to end (most recently used)
+        self._store.move_to_end(key)
+        return entry["value"]
+
+    def set(self, key: str, value: Any, ttl: int) -> None:
+        if key in self._store:
+            self._store.move_to_end(key)
+        self._store[key] = {
+            "value": value,
+            "expires_at": time.time() + ttl,
+        }
+        # Evict oldest if over capacity
+        while len(self._store) > self._max_keys:
+            self._store.popitem(last=False)
+
+    def delete(self, key: str) -> None:
+        self._store.pop(key, None)
+
+    def match_delete(self, pattern: str) -> int:
+        """Delete keys matching a simple glob pattern (e.g. 'price:*')."""
+        prefix = pattern.rstrip("*") if pattern.endswith("*") else None
+        to_delete = []
+        for k in self._store:
+            if prefix is not None:
+                if k.startswith(prefix):
+                    to_delete.append(k)
+            elif k == pattern:
+                to_delete.append(k)
+        for k in to_delete:
+            del self._store[k]
+        return len(to_delete)
+
+    def clear(self) -> None:
+        self._store.clear()
+
+    def __len__(self) -> int:
+        return len(self._store)
+
+    @staticmethod
+    def _match_pattern(key: str, pattern: str) -> bool:
+        if pattern.endswith("*"):
+            return key.startswith(pattern[:-1])
+        return key == pattern
+
 
 class CacheService:
     """
-    Redis-backed cache service with in-memory fallback.
-    
+    Redis-backed cache service with bounded in-memory fallback.
+
     Uses the synchronous redis-py client for simplicity since cache
     operations are fast (~1ms) and don't benefit much from async overhead.
     For async support, this can be upgraded to redis.asyncio.
     """
-    
+
     def __init__(self, redis_url: str = "redis://localhost:6379", db: int = 0):
         self._redis = None
         self._redis_available = False
-        self._fallback_cache: Dict[str, Dict[str, Any]] = {}
+        self._fallback_cache = _LRUFallbackCache(max_keys=FALLBACK_MAX_KEYS)
         self._redis_url = redis_url
         self._db = db
         self._stats = {
@@ -56,34 +127,70 @@ class CacheService:
             "sets": 0,
             "errors": 0,
         }
-        
+
+        # Configurable timeouts via environment
+        self._connect_timeout = int(os.environ.get("REDIS_CONNECT_TIMEOUT", "5"))
+        self._socket_timeout = int(os.environ.get("REDIS_SOCKET_TIMEOUT", "5"))
+        self._max_connections = int(os.environ.get("REDIS_MAX_CONNECTIONS", "10"))
+
     def initialize(self):
-        """Initialize Redis connection. Safe to call multiple times."""
+        """Initialize Redis connection with retry and backoff. Safe to call multiple times."""
+        max_retries = 3
+        backoff_base = 1  # seconds
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                import redis as redis_lib
+                pool = redis_lib.ConnectionPool.from_url(
+                    self._redis_url,
+                    db=self._db,
+                    decode_responses=True,
+                    socket_connect_timeout=self._connect_timeout,
+                    socket_timeout=self._socket_timeout,
+                    retry_on_timeout=True,
+                    max_connections=self._max_connections,
+                )
+                self._redis = redis_lib.Redis(connection_pool=pool)
+                # Test connection
+                self._redis.ping()
+                self._redis_available = True
+                logger.info("Redis cache connected successfully")
+                return
+            except ImportError:
+                logger.warning("redis package not installed, using in-memory cache fallback")
+                self._redis_available = False
+                return
+            except Exception as e:
+                if attempt < max_retries:
+                    wait = backoff_base * (2 ** (attempt - 1))
+                    logger.warning(
+                        f"Redis connection attempt {attempt}/{max_retries} failed ({e}), "
+                        f"retrying in {wait}s..."
+                    )
+                    time.sleep(wait)
+                else:
+                    logger.warning(
+                        f"Redis not available after {max_retries} attempts ({e}), "
+                        f"using in-memory cache fallback"
+                    )
+                    self._redis_available = False
+
+    def _try_reconnect(self) -> bool:
+        """Attempt a single reconnection to Redis. Returns True if successful."""
+        if self._redis is None:
+            return False
         try:
-            import redis
-            self._redis = redis.Redis.from_url(
-                self._redis_url,
-                db=self._db,
-                decode_responses=True,
-                socket_connect_timeout=2,
-                socket_timeout=1,
-                retry_on_timeout=True,
-            )
-            # Test connection
             self._redis.ping()
             self._redis_available = True
-            logger.info("✅ Redis cache connected successfully")
-        except ImportError:
-            logger.warning("redis package not installed, using in-memory cache fallback")
-            self._redis_available = False
-        except Exception as e:
-            logger.warning(f"Redis not available ({e}), using in-memory cache fallback")
-            self._redis_available = False
-    
+            logger.info("Redis reconnected successfully")
+            return True
+        except Exception:
+            return False
+
     @property
     def is_redis_available(self) -> bool:
         return self._redis_available
-    
+
     def get(self, key: str) -> Optional[Any]:
         """Get a value from cache. Returns None on miss."""
         try:
@@ -95,22 +202,22 @@ class CacheService:
                 self._stats["misses"] += 1
                 return None
             else:
-                # Fallback: in-memory cache with manual TTL check
-                entry = self._fallback_cache.get(key)
-                if entry is None:
-                    self._stats["misses"] += 1
-                    return None
-                if datetime.now(timezone.utc).timestamp() > entry["expires_at"]:
-                    del self._fallback_cache[key]
-                    self._stats["misses"] += 1
-                    return None
-                self._stats["hits"] += 1
-                return entry["value"]
+                # Fallback: bounded in-memory cache with TTL
+                result = self._fallback_cache.get(key)
+                if result is not None:
+                    self._stats["hits"] += 1
+                    return result
+                self._stats["misses"] += 1
+                return None
         except Exception as e:
             self._stats["errors"] += 1
             logger.debug(f"Cache get error for {key}: {e}")
+            # Try reconnect on failure, fall through to None
+            if self._redis_available:
+                self._redis_available = False
+                self._try_reconnect()
             return None
-    
+
     def set(self, key: str, value: Any, ttl: int = DEFAULT_CACHE_TTL) -> bool:
         """Set a value in cache with TTL (seconds). Returns True on success."""
         try:
@@ -118,95 +225,90 @@ class CacheService:
             if self._redis_available:
                 self._redis.setex(key, ttl, serialized)
             else:
-                self._fallback_cache[key] = {
-                    "value": value,
-                    "expires_at": datetime.now(timezone.utc).timestamp() + ttl,
-                }
+                self._fallback_cache.set(key, value, ttl)
             self._stats["sets"] += 1
             return True
         except Exception as e:
             self._stats["errors"] += 1
             logger.debug(f"Cache set error for {key}: {e}")
+            if self._redis_available:
+                self._redis_available = False
+                self._try_reconnect()
             return False
-    
+
     def delete(self, key: str) -> bool:
         """Delete a key from cache."""
         try:
             if self._redis_available:
                 self._redis.delete(key)
             else:
-                self._fallback_cache.pop(key, None)
+                self._fallback_cache.delete(key)
             return True
         except Exception as e:
             logger.debug(f"Cache delete error for {key}: {e}")
             return False
-    
+
     def delete_pattern(self, pattern: str) -> int:
-        """Delete all keys matching a pattern (e.g., 'price:*'). Returns count deleted."""
+        """Delete all keys matching a pattern using SCAN (not KEYS). Returns count deleted."""
         try:
             if self._redis_available:
-                keys = self._redis.keys(pattern)
-                if keys:
-                    return self._redis.delete(*keys)
-                return 0
+                deleted = 0
+                cursor = 0
+                while True:
+                    cursor, keys = self._redis.scan(cursor=cursor, match=pattern, count=100)
+                    if keys:
+                        deleted += self._redis.delete(*keys)
+                    if cursor == 0:
+                        break
+                return deleted
             else:
-                to_delete = [k for k in self._fallback_cache if self._match_pattern(k, pattern)]
-                for k in to_delete:
-                    del self._fallback_cache[k]
-                return len(to_delete)
+                return self._fallback_cache.match_delete(pattern)
         except Exception as e:
             logger.debug(f"Cache delete_pattern error for {pattern}: {e}")
             return 0
-    
-    @staticmethod
-    def _match_pattern(key: str, pattern: str) -> bool:
-        """Simple glob pattern matching for fallback cache."""
-        if pattern.endswith("*"):
-            return key.startswith(pattern[:-1])
-        return key == pattern
-    
+
     # ========================
     # Domain-specific helpers
     # ========================
-    
+
     def get_price(self, symbol: str) -> Optional[Dict]:
         """Get cached live price quote for a symbol."""
         return self.get(f"{PREFIX_PRICE}{symbol}")
-    
+
     def set_price(self, symbol: str, data: Dict) -> bool:
         """Cache live price quote for a symbol."""
         return self.set(f"{PREFIX_PRICE}{symbol}", data, PRICE_CACHE_TTL)
-    
+
     def get_analysis(self, symbol: str) -> Optional[Dict]:
         """Get cached analysis result for a symbol."""
         return self.get(f"{PREFIX_ANALYSIS}{symbol}")
-    
+
     def set_analysis(self, symbol: str, data: Dict) -> bool:
         """Cache analysis result for a symbol."""
         return self.set(f"{PREFIX_ANALYSIS}{symbol}", data, ANALYSIS_CACHE_TTL)
-    
+
     def get_stock_list(self) -> Optional[Dict]:
         """Get cached stock list (all stocks data)."""
         return self.get(PREFIX_STOCK_LIST)
-    
+
     def set_stock_list(self, data: Dict) -> bool:
         """Cache stock list (all stocks data)."""
         return self.set(PREFIX_STOCK_LIST, data, STOCK_LIST_CACHE_TTL)
-    
+
     def get_market_overview(self) -> Optional[Dict]:
         """Get cached market overview."""
         return self.get(f"{PREFIX_MARKET}overview")
-    
+
     def set_market_overview(self, data: Dict) -> bool:
         """Cache market overview."""
         return self.set(f"{PREFIX_MARKET}overview", data, PRICE_CACHE_TTL)
-    
+
     def invalidate_stock(self, symbol: str):
         """Invalidate all caches for a specific stock."""
         self.delete(f"{PREFIX_PRICE}{symbol}")
         self.delete(f"{PREFIX_ANALYSIS}{symbol}")
         self.delete(f"{PREFIX_STOCK}{symbol}")
-    
+
     def invalidate_all(self):
         """Invalidate all caches."""
         if self._redis_available:
@@ -216,18 +318,18 @@ class CacheService:
                 logger.warning(f"Failed to flush Redis: {e}")
         else:
             self._fallback_cache.clear()
-    
+
     def get_stats(self) -> Dict:
         """Get cache statistics."""
         total = self._stats["hits"] + self._stats["misses"]
         hit_rate = (self._stats["hits"] / total * 100) if total > 0 else 0
-        
+
         stats = {
             **self._stats,
             "hit_rate_percent": round(hit_rate, 2),
             "backend": "redis" if self._redis_available else "in-memory",
         }
-        
+
         if self._redis_available:
             try:
                 info = self._redis.info("memory")
@@ -237,9 +339,9 @@ class CacheService:
                 pass
         else:
             stats["in_memory_keys"] = len(self._fallback_cache)
-        
+
         return stats
-    
+
     def close(self):
         """Close Redis connection."""
         if self._redis:
@@ -247,11 +349,11 @@ class CacheService:
                 self._redis.close()
             except Exception:
                 pass
-    
+
     # ========================
     # HASH — per-field stock data
     # ========================
-    
+
     def set_stock_hash(self, symbol: str, fields: Dict[str, Any]) -> bool:
         """Store individual stock fields as a Redis HASH (enables partial reads)."""
         try:
@@ -268,7 +370,21 @@ class CacheService:
             self._stats["errors"] += 1
             logger.debug(f"HASH set error for {symbol}: {e}")
             return False
-    
+
+    def get_stock_hash(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Get all fields from a stock's HASH."""
+        try:
+            if self._redis_available:
+                data = self._redis.hgetall(f"stock:{symbol}")
+                if data:
+                    self._stats["hits"] += 1
+                    return {k: json.loads(v) for k, v in data.items()}
+                self._stats["misses"] += 1
+            return None
+        except Exception as e:
+            self._stats["errors"] += 1
+            return None
+
     def get_stock_field(self, symbol: str, field: str) -> Optional[Any]:
         """Get a single field from a stock's HASH (e.g., just the price)."""
         try:
@@ -282,7 +398,7 @@ class CacheService:
         except Exception as e:
             self._stats["errors"] += 1
             return None
-    
+
     def get_stock_fields(self, symbol: str, fields: List[str]) -> Dict[str, Any]:
         """Get multiple fields from a stock's HASH."""
         try:
@@ -300,15 +416,15 @@ class CacheService:
             return {}
         except Exception:
             return {}
-    
+
     # ========================
     # SORTED SET — top movers
     # ========================
-    
+
     def update_top_movers(self, gainers: Dict[str, float], losers: Dict[str, float]) -> bool:
         """
         Update top gainers and losers using Redis SORTED SETs.
-        
+
         Args:
             gainers: Dict of {symbol: price_change_percent} for gainers
             losers: Dict of {symbol: price_change_percent} for losers
@@ -327,7 +443,7 @@ class CacheService:
         except Exception as e:
             logger.debug(f"ZSET update error: {e}")
             return False
-    
+
     def get_top_gainers(self, count: int = 10) -> List[Dict[str, Any]]:
         """Get top N gainers from SORTED SET (highest change % first)."""
         try:
@@ -337,7 +453,7 @@ class CacheService:
             return []
         except Exception:
             return []
-    
+
     def get_top_losers(self, count: int = 10) -> List[Dict[str, Any]]:
         """Get top N losers from SORTED SET (biggest loss first)."""
         try:
@@ -347,11 +463,11 @@ class CacheService:
             return []
         except Exception:
             return []
-    
+
     # ========================
     # PUB/SUB — real-time prices
     # ========================
-    
+
     def publish_price(self, symbol: str, price_data: Dict) -> bool:
         """Publish a price update to the Redis PUB/SUB channel."""
         try:
@@ -364,18 +480,114 @@ class CacheService:
         except Exception as e:
             logger.debug(f"PUB/SUB publish error: {e}")
             return False
-    
+
     def publish_alert(self, alert_data: Dict) -> bool:
-        """Push an alert notification to the Redis alert queue (LIST)."""
+        """Push an alert notification to the Redis alert queue (LIST).
+        Caps the queue at ALERT_QUEUE_MAX_LENGTH to prevent unbounded growth."""
         try:
             if self._redis_available:
                 payload = json.dumps(alert_data, default=str)
-                self._redis.rpush("alert_queue", payload)
+                pipe = self._redis.pipeline()
+                pipe.rpush("alert_queue", payload)
+                pipe.ltrim("alert_queue", -ALERT_QUEUE_MAX_LENGTH, -1)
+                pipe.execute()
                 return True
             return False
         except Exception as e:
             logger.debug(f"Alert queue push error: {e}")
             return False
+
+    # ========================
+    # Dashboard / introspection helpers
+    # ========================
+
+    def get_redis_info(self, section: str = "memory") -> Optional[Dict[str, Any]]:
+        """Get Redis INFO for a given section. Returns None if unavailable."""
+        if not self._redis_available:
+            return None
+        try:
+            return self._redis.info(section)
+        except Exception as e:
+            logger.debug(f"Redis INFO error: {e}")
+            return None
+
+    def get_dbsize(self) -> int:
+        """Get total number of keys in the current Redis database."""
+        if not self._redis_available:
+            return 0
+        try:
+            return self._redis.dbsize()
+        except Exception:
+            return 0
+
+    def scan_keys(
+        self, pattern: str = "*", count: int = 100, max_keys: int = 500
+    ) -> List[str]:
+        """
+        Scan Redis keys matching a pattern using SCAN (non-blocking).
+        Returns up to max_keys matching key names.
+        """
+        if not self._redis_available:
+            return []
+        try:
+            keys = []
+            cursor = 0
+            while True:
+                cursor, batch = self._redis.scan(cursor=cursor, match=pattern, count=count)
+                for key in batch:
+                    if isinstance(key, bytes):
+                        key = key.decode("utf-8")
+                    keys.append(key)
+                    if len(keys) >= max_keys:
+                        return keys
+                if cursor == 0:
+                    break
+            return keys
+        except Exception as e:
+            logger.debug(f"Redis SCAN error: {e}")
+            return []
+
+    def get_key_info(self, key: str) -> Optional[Dict[str, Any]]:
+        """Get type and TTL for a single Redis key."""
+        if not self._redis_available:
+            return None
+        try:
+            key_type = self._redis.type(key)
+            if isinstance(key_type, bytes):
+                key_type = key_type.decode("utf-8")
+            ttl = self._redis.ttl(key)
+            return {"type": key_type, "ttl": ttl if ttl > 0 else None}
+        except Exception:
+            return None
+
+    def get_key_value_preview(self, key: str, max_length: int = 500) -> Optional[Dict[str, Any]]:
+        """Get a preview of a key's value for dashboard display."""
+        if not self._redis_available:
+            return None
+        try:
+            key_type = self._redis.type(key)
+            if isinstance(key_type, bytes):
+                key_type = key_type.decode("utf-8")
+
+            info: Dict[str, Any] = {}
+            if key_type == "string":
+                val = self._redis.get(key)
+                if isinstance(val, bytes):
+                    val = val.decode("utf-8")
+                if val and len(val) > max_length:
+                    val = val[:max_length] + "...(truncated)"
+                info["value_preview"] = val
+            elif key_type == "list":
+                info["length"] = self._redis.llen(key)
+            elif key_type == "set":
+                info["members"] = self._redis.scard(key)
+            elif key_type == "zset":
+                info["members"] = self._redis.zcard(key)
+            elif key_type == "hash":
+                info["fields"] = self._redis.hlen(key)
+            return info
+        except Exception:
+            return None
 
 
 # Module-level singleton

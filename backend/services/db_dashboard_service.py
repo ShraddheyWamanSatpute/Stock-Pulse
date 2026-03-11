@@ -600,56 +600,36 @@ class DatabaseDashboardService:
     # ===============================================================
 
     def get_redis_keys(self, prefix: str = "") -> List[Dict[str, Any]]:
-        """List Redis keys grouped by prefix with metadata."""
+        """List Redis keys grouped by prefix with metadata.
+        Uses SCAN via CacheService (non-blocking) instead of KEYS."""
         if not self.cache or not self.cache.is_redis_available:
             return []
 
         try:
-            r = self.cache._redis
             pattern = f"{prefix}*" if prefix else "*"
+            scanned_keys = self.cache.scan_keys(pattern=pattern, count=200, max_keys=500)
             keys = []
-            for key in r.scan_iter(match=pattern, count=200):
-                if isinstance(key, bytes):
-                    key = key.decode("utf-8")
-                key_type = r.type(key)
-                if isinstance(key_type, bytes):
-                    key_type = key_type.decode("utf-8")
-                ttl = r.ttl(key)
+            for key in scanned_keys:
+                key_info_meta = self.cache.get_key_info(key)
+                if not key_info_meta:
+                    continue
 
                 key_info = {
                     "key": key,
-                    "type": key_type,
-                    "ttl": ttl if ttl > 0 else None,
+                    "type": key_info_meta["type"],
+                    "ttl": key_info_meta["ttl"],
                 }
 
                 # Only show values for safe prefixes
                 is_safe = any(key.startswith(p) for p in REDIS_SAFE_PREFIXES)
                 if is_safe:
-                    try:
-                        if key_type == "string":
-                            val = r.get(key)
-                            if isinstance(val, bytes):
-                                val = val.decode("utf-8")
-                            # Truncate long values
-                            if val and len(val) > 500:
-                                val = val[:500] + "...(truncated)"
-                            key_info["value_preview"] = val
-                        elif key_type == "list":
-                            key_info["length"] = r.llen(key)
-                        elif key_type == "set":
-                            key_info["members"] = r.scard(key)
-                        elif key_type == "zset":
-                            key_info["members"] = r.zcard(key)
-                        elif key_type == "hash":
-                            key_info["fields"] = r.hlen(key)
-                    except Exception:
-                        pass
+                    preview = self.cache.get_key_value_preview(key)
+                    if preview:
+                        key_info.update(preview)
                 else:
                     key_info["value_preview"] = "(hidden - potentially sensitive)"
 
                 keys.append(key_info)
-                if len(keys) >= 500:
-                    break
 
             return keys
         except Exception as e:
@@ -1032,19 +1012,19 @@ class DatabaseDashboardService:
         # Redis memory check
         if self.cache and self.cache.is_redis_available:
             try:
-                r = self.cache._redis
-                info = r.info("memory")
-                used_mb = info.get("used_memory", 0) / (1024 * 1024)
-                warn_mb = thresholds.get("redis_memory_warn_mb", 512)
-                if used_mb > warn_mb:
-                    alerts.append({
-                        "type": "memory",
-                        "store": "redis",
-                        "severity": "warning",
-                        "message": f"Redis memory ({used_mb:.0f} MB) exceeds threshold ({warn_mb} MB)",
-                        "current_value": round(used_mb, 0),
-                        "threshold": warn_mb,
-                    })
+                info = self.cache.get_redis_info("memory")
+                if info:
+                    used_mb = info.get("used_memory", 0) / (1024 * 1024)
+                    warn_mb = thresholds.get("redis_memory_warn_mb", 512)
+                    if used_mb > warn_mb:
+                        alerts.append({
+                            "type": "memory",
+                            "store": "redis",
+                            "severity": "warning",
+                            "message": f"Redis memory ({used_mb:.0f} MB) exceeds threshold ({warn_mb} MB)",
+                            "current_value": round(used_mb, 0),
+                            "threshold": warn_mb,
+                        })
             except Exception:
                 pass
 
@@ -1394,11 +1374,12 @@ class DatabaseDashboardService:
         # Redis
         if self.cache and self.cache.is_redis_available:
             try:
-                info = self.cache._redis.info("memory")
-                snapshot["redis"]["memory_mb"] = round(
-                    info.get("used_memory", 0) / (1024 * 1024), 2
-                )
-                snapshot["redis"]["key_count"] = self.cache._redis.dbsize()
+                info = self.cache.get_redis_info("memory")
+                if info:
+                    snapshot["redis"]["memory_mb"] = round(
+                        info.get("used_memory", 0) / (1024 * 1024), 2
+                    )
+                snapshot["redis"]["key_count"] = self.cache.get_dbsize()
             except Exception:
                 pass
 
