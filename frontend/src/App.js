@@ -14,6 +14,9 @@ import Backtest from "@/pages/Backtest";
 import DataPipeline from "@/pages/DataPipeline";
 import DatabaseDashboard from "@/pages/DatabaseDashboard";
 import PostgresControl from "@/pages/PostgresControl";
+import MacroIndicators from "@/pages/MacroIndicators";
+import Derivatives from "@/pages/Derivatives";
+import IntradayMetrics from "@/pages/IntradayMetrics";
 
 function App() {
   return (
@@ -30,6 +33,9 @@ function App() {
             <Route path="/backtest" element={<Backtest />} />
             <Route path="/news" element={<NewsHub />} />
             <Route path="/reports" element={<Reports />} />
+            <Route path="/macro" element={<MacroIndicators />} />
+            <Route path="/derivatives" element={<Derivatives />} />
+            <Route path="/intraday" element={<IntradayMetrics />} />
             <Route path="/data-pipeline" element={<DataPipeline />} />
             <Route path="/db-dashboard" element={<DatabaseDashboard />} />
             <Route path="/pg-control" element={<PostgresControl />} />

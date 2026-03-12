@@ -18,6 +18,9 @@ import {
   Database,
   Server,
   HardDrive,
+  Globe,
+  Activity,
+  CandlestickChart,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -31,6 +34,9 @@ const navItems = [
   { path: "/portfolio", label: "Portfolio", icon: Briefcase },
   { path: "/alerts", label: "Alerts", icon: Bell },
   { path: "/backtest", label: "Backtest", icon: LineChart },
+  { path: "/macro", label: "Macro", icon: Globe },
+  { path: "/derivatives", label: "Derivatives", icon: CandlestickChart },
+  { path: "/intraday", label: "Intraday", icon: Activity },
   { path: "/data-pipeline", label: "Data Pipeline", icon: Database },
   { path: "/db-dashboard", label: "DB Dashboard", icon: Server },
   { path: "/pg-control", label: "PG Control", icon: HardDrive },
