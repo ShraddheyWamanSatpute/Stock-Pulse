@@ -35,7 +35,6 @@ See **§8.3** for Phase 1 completion checklist (all items done). Implemented fil
 | **DB index** | `CacheService(db=0)` | Fixed DB 0 |
 | **Timeouts** | `REDIS_CONNECT_TIMEOUT`, `REDIS_SOCKET_TIMEOUT` (default 5s each) | Configurable via env |
 | **Connection pooling** | `ConnectionPool` with `REDIS_MAX_CONNECTIONS` (default 10) | Used by CacheService |
-| **SSL/TLS** | `REDIS_URL` with `rediss://` scheme and optional `REDIS_SSL=true` | See REDIS_SETUP.md for TLS notes |
 | **Eviction / maxmemory** | Documented in REDIS_SETUP.md and Data_Storage_and_Growth_Guide.md | Set in Redis server config |
 
 ### 1.3 Existing Redis Usage
@@ -74,11 +73,7 @@ See **§8.3** for Phase 1 completion checklist (all items done). Implemented fil
   - `GET /stocks/:symbol/analysis` → cache key `analysis:{symbol}` (300s)
   - `POST /screener` → cache key `screener:{filter_hash}` (120s)
   - Stock list used by multiple endpoints → `stock_list` (300s)
-  - `GET /timeseries/stats` → cached ~30s
-  - `GET /database/health` → cached ~30s
-  - `GET /database/overview` → cached ~30s (`database:overview`)
-  - `GET /pipeline/status` → cached ~30s
-- **Remaining opportunities (later):** `GET /stocks` (list), `GET /sectors`, or any new heavy dashboard endpoints.
+- **Not cached (potential for UX):** `GET /timeseries/stats`, `GET /database/health`, `GET /database/overview`, `GET /pipeline/status`, `GET /stocks` (list), `GET /sectors`, heavy GETs used by Dashboard and Database Dashboard. Adding short TTL cache for these would reduce latency and improve responsiveness.
 - **Deployment:** Redis is configured via `REDIS_URL` only. No Docker Compose Redis service definition in repo; no explicit production deployment steps (install Redis, set maxmemory, run `setup_databases.py --redis`) in this roadmap — added below in §2.1 and §8.
 
 ---
@@ -127,17 +122,17 @@ See **§8.3** for Phase 1 completion checklist (all items done). Implemented fil
 
 | Gap | Recommendation |
 |-----|----------------|
-| **Market data cache not shared** | ✅ Implemented — market_data_service uses Redis for quotes, history, indices, fundamentals. |
+| **Market data cache not shared** | Cache get_stock_quote, get_historical_data, get_market_indices, get_stock_fundamentals in Redis (with TTL) so multiple workers or restarts share the same cache. |
 | **No rate limiting** | Use Redis INCR + EXPIRE (or Redis 7+ rate limit helpers) for API rate limiting per IP or per user. |
 | **No job queue** | If async jobs (e.g. bhavcopy, macro job) should be queued: use Redis as broker (e.g. Celery or RQ) and document in roadmap; otherwise keep current “trigger via API” approach. |
-| **No cache invalidation on DB write** | ✅ Implemented — pipeline_service calls `invalidate_stock(symbol)` before writing fresh price/stock data to Redis. |
+| **No cache invalidation on DB write** | When pipeline or bhavcopy updates a symbol, optionally invalidate only that symbol’s cache (e.g. price:SYMBOL, analysis:SYMBOL); currently pipeline overwrites price/stock which is acceptable. |
 | **No session store** | If moving to multi-user with server-side sessions, store session in Redis with TTL; if staying stateless/JWT, no change. |
-| **Frequently accessed API responses not cached** | ✅ Implemented — `/timeseries/stats`, `/database/health`, `/database/overview`, `/pipeline/status` cached 30–60s. |
-| **Query result caching** | ✅ Implemented for dashboard metrics (stats, health, overview, pipeline status); screener already cached. |
+| **Frequently accessed API responses not cached** | Cache GETs used by frontend for dashboard UX: e.g. `/timeseries/stats`, `/database/health`, `/database/overview`, `/pipeline/status` with 30–60s TTL. |
+| **Query result caching** | Heavy query results (screener already cached; optionally timeseries stats, database overview) benefit from short TTL to reduce backend load and improve response time. |
 | **No task scheduling backend** | Redis can back Celery Beat or similar for cron-like runs; currently jobs are manual/API-triggered. |
-| **Deployment configuration** | ✅ Documented — Redis deployment and maxmemory/eviction in REDIS_SETUP.md and Data_Storage_and_Growth_Guide.md. |
-| **Testing** | ✅ Implemented — `test_redis_cache.py` covers cache get/set, fallback, and SCAN. |
-| **Runbook** | ✅ Implemented — REDIS_SETUP.md contains Redis runbook (when down, verify, safe flush, restart). |
+| **Deployment configuration** | Document Redis in deployment: Docker image (or docker run), REDIS_URL for production, optional TLS, health check in orchestrator. |
+| **Testing** | Only connectivity in test_pipeline.py; no tests for cache get/set, fallback, or SCAN. Add or extend tests (see §2.1 task 15). |
+| **Runbook** | No dedicated Redis runbook; only brief mention in MongoDB_Runbooks. Add Redis section: when down, verify, safe flush, restart (see §2.1 task 14). |
 
 ---
 
@@ -226,10 +221,10 @@ Use a single key prefix to avoid collision and support multiple environments. Ex
 | GET /stocks/:symbol/analysis | Yes | 300s | Analyzer tab, backend compute |
 | POST /screener | Yes (by filter hash) | 120s | Screener results, DB load |
 | Stock list (internal) | Yes (stock_list) | 300s | Multiple endpoints |
-| GET /timeseries/stats | Yes | ~30s | Dashboard metrics |
-| GET /database/health | Yes | ~30s | Database Dashboard health |
-| GET /database/overview | Yes | ~30s | Database Dashboard overview |
-| GET /pipeline/status | Yes | ~30s | Pipeline status page |
+| GET /timeseries/stats | No | — | Add 30–60s for dashboard |
+| GET /database/health | No | — | Add 30–60s for dashboard |
+| GET /database/overview | No | — | Add 30–60s for dashboard |
+| GET /pipeline/status | No | — | Add 30s for pipeline page |
 
 ### 5.2 Website Responsiveness and User Experience
 
@@ -302,8 +297,8 @@ Use a single key prefix to avoid collision and support multiple environments. Ex
 2. **Namespace prefix** (e.g. `stockpulse:`) for all keys; configurable via REDIS_KEY_PREFIX.
 3. **market_data_service** use CacheService for quote/history/indices/fundamentals (with existing TTLs) so cache is shared across restarts/workers.
 4. **Dashboard:** Use CacheService methods for Redis info and key listing instead of `cache._redis` (add get_redis_info(), scan_keys).
-5. **Query result / API response caching:** ✅ Done — short TTL cache (30–60s) for GET /timeseries/stats, /database/health, /database/overview, /pipeline/status to improve dashboard responsiveness and reduce backend load.
-6. **CacheService API for dashboard:** ✅ Done — get_redis_info() and scan_keys(prefix, cursor, count); db_dashboard_service now uses these instead of cache._redis (see §2.1 task 17).
+5. **Query result / API response caching:** Add short TTL cache (30–60s) for GET /timeseries/stats, /database/health, /database/overview, /pipeline/status to improve dashboard responsiveness and reduce backend load.
+6. **CacheService API for dashboard:** Add get_redis_info() and scan_keys(prefix, cursor, count); refactor db_dashboard_service to use these instead of cache._redis (see §2.1 task 17).
 7. **Optional:** get_stock_hash(symbol) in CacheService for full HASH read (see §2.1 task 18).
 8. **Optional:** Periodic Redis health check (e.g. background task ping every 60s) and reconnect if connection lost (see §2.1 task 3).
 
