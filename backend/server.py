@@ -1827,8 +1827,8 @@ async def get_recent_notifications(limit: int = Query(default=20, le=50)):
     if not ALERTS_AVAILABLE:
         raise HTTPException(status_code=503, detail="Alerts service not available")
     
-    notifications = alerts_service.get_recent_notifications(limit)
-    return [n.model_dump() for n in notifications]
+    notifications = await alerts_service.get_recent_notifications(limit)
+    return notifications
 
 
 @api_router.post("/alerts/check")

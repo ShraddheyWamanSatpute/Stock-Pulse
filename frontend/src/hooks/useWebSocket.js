@@ -14,6 +14,7 @@ const MAX_RECONNECT_ATTEMPTS = 5;
 export function useWebSocket({
     url,
     onPriceUpdate,
+    onAlertNotification,
     onConnectionChange,
     autoConnect = true,
 } = {}) {
@@ -69,6 +70,8 @@ export function useWebSocket({
                         const newPrices = message.data;
                         setPrices((prev) => ({ ...prev, ...newPrices }));
                         onPriceUpdate?.(newPrices);
+                    } else if (message.type === 'alert_notification') {
+                        onAlertNotification?.(message.data);
                     } else if (message.type === 'subscribed') {
                         console.log('Subscribed to:', message.symbols);
                     } else if (message.type === 'unsubscribed') {
@@ -219,9 +222,10 @@ import { createContext, useContext } from 'react';
 
 const WebSocketContext = createContext(null);
 
-export function WebSocketProvider({ children }) {
+export function WebSocketProvider({ children, onAlertNotification }) {
     const websocket = useWebSocket({
         autoConnect: true,
+        onAlertNotification,
     });
 
     return (

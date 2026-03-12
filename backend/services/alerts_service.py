@@ -156,9 +156,46 @@ class AlertsService:
             {"$set": update_data}
         )
         
-        # Store notification
+        # Store notification in-memory (for backward compat)
         self._notifications.append(notification)
-        
+
+        # Persist notification to MongoDB
+        notif_doc = {
+            "alert_id": notification.alert_id,
+            "symbol": notification.symbol,
+            "stock_name": notification.stock_name,
+            "condition": notification.condition.value if hasattr(notification.condition, 'value') else notification.condition,
+            "target_value": notification.target_value,
+            "current_price": notification.current_price,
+            "message": notification.message,
+            "priority": notification.priority.value if hasattr(notification.priority, 'value') else notification.priority,
+            "triggered_at": now.isoformat(),
+            "read": False,
+        }
+        try:
+            await self.db.alert_notifications.insert_one(notif_doc)
+        except Exception as e:
+            logger.warning(f"Failed to persist notification to MongoDB: {e}")
+
+        # Publish to Redis alert queue for real-time dispatch
+        try:
+            from services.cache_service import get_cache_service
+            cache_svc = get_cache_service()
+            if cache_svc:
+                cache_svc.publish_alert({
+                    "type": notification.condition.value if hasattr(notification.condition, 'value') else notification.condition,
+                    "alert_id": notification.alert_id,
+                    "symbol": notification.symbol,
+                    "stock_name": notification.stock_name,
+                    "target_value": notification.target_value,
+                    "current_price": notification.current_price,
+                    "message": notification.message,
+                    "priority": notification.priority.value if hasattr(notification.priority, 'value') else notification.priority,
+                    "triggered_at": now.isoformat(),
+                })
+        except Exception as e:
+            logger.debug(f"Failed to publish alert to Redis queue: {e}")
+
         logger.info(f"Alert {alert.id} triggered at price {current_price}")
         
         return notification
@@ -295,13 +332,40 @@ class AlertsService:
             alerts_by_symbol=by_symbol,
         )
     
-    def get_recent_notifications(self, limit: int = 20) -> List[AlertNotification]:
-        """Get recent notifications"""
-        return self._notifications[-limit:]
-    
-    def clear_notifications(self):
-        """Clear stored notifications"""
+    async def get_recent_notifications(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Get recent notifications from MongoDB (falls back to in-memory)."""
+        try:
+            cursor = self.db.alert_notifications.find(
+                {}, {"_id": 0}
+            ).sort("triggered_at", -1).limit(limit)
+            docs = await cursor.to_list(length=limit)
+            if docs:
+                return docs
+        except Exception as e:
+            logger.debug(f"MongoDB notification read failed, using in-memory: {e}")
+        # Fallback to in-memory
+        results = []
+        for n in self._notifications[-limit:]:
+            results.append({
+                "alert_id": n.alert_id,
+                "symbol": n.symbol,
+                "stock_name": n.stock_name,
+                "condition": n.condition.value if hasattr(n.condition, 'value') else n.condition,
+                "target_value": n.target_value,
+                "current_price": n.current_price,
+                "message": n.message,
+                "priority": n.priority.value if hasattr(n.priority, 'value') else n.priority,
+                "triggered_at": n.triggered_at.isoformat() if hasattr(n.triggered_at, 'isoformat') else str(n.triggered_at),
+            })
+        return results
+
+    async def clear_notifications(self):
+        """Clear stored notifications."""
         self._notifications = []
+        try:
+            await self.db.alert_notifications.delete_many({})
+        except Exception as e:
+            logger.debug(f"Failed to clear MongoDB notifications: {e}")
     
     # Background task for checking alerts
     async def start_background_checker(self, price_fetcher):

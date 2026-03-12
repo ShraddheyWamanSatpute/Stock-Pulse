@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
 import {
     Bell,
@@ -13,6 +13,8 @@ import {
     Check,
     X,
     Target,
+    Wifi,
+    WifiOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,6 +37,7 @@ import {
 } from "@/components/ui/select";
 import { searchStocks } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
+import { useWebSocket } from "@/hooks/useWebSocket";
 
 const ALERT_CONDITIONS = [
     { value: "price_above", label: "Price goes above", icon: TrendingUp },
@@ -67,6 +70,24 @@ export default function Alerts() {
         target_value: "",
         priority: "medium",
         message: "",
+    });
+
+    // Real-time alert notifications via WebSocket
+    const handleAlertNotification = useCallback((alertData) => {
+        // Show toast notification
+        toast.success(alertData.message || `Alert triggered for ${alertData.symbol}`, {
+            duration: 8000,
+            description: `${alertData.symbol} at ${formatCurrency(alertData.current_price)}`,
+        });
+        // Prepend to notifications list
+        setNotifications((prev) => [alertData, ...prev].slice(0, 20));
+        // Refresh alerts to get updated statuses
+        fetchAlerts();
+    }, []);
+
+    const { isConnected } = useWebSocket({
+        onAlertNotification: handleAlertNotification,
+        autoConnect: true,
     });
 
     useEffect(() => {
@@ -232,13 +253,28 @@ export default function Alerts() {
                         Get notified when stocks hit your target prices
                     </p>
                 </div>
-                <Button
-                    onClick={() => setShowCreateDialog(true)}
-                    className="bg-blue-600 hover:bg-blue-700"
-                >
-                    <Plus className="w-4 h-4 mr-2" />
-                    Create Alert
-                </Button>
+                <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1.5 text-xs">
+                        {isConnected ? (
+                            <>
+                                <Wifi className="w-3.5 h-3.5 text-green-500" />
+                                <span className="text-green-500">Live</span>
+                            </>
+                        ) : (
+                            <>
+                                <WifiOff className="w-3.5 h-3.5 text-gray-500" />
+                                <span className="text-gray-500">Offline</span>
+                            </>
+                        )}
+                    </div>
+                    <Button
+                        onClick={() => setShowCreateDialog(true)}
+                        className="bg-blue-600 hover:bg-blue-700"
+                    >
+                        <Plus className="w-4 h-4 mr-2" />
+                        Create Alert
+                    </Button>
+                </div>
             </div>
 
             {/* Summary Cards */}

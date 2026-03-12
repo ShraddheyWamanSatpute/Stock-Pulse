@@ -2,7 +2,8 @@
 Alert Queue Consumer for StockPulse
 
 Background task that consumes alerts from the Redis alert_queue (LIST)
-using BLPOP and processes them (e.g., logging, future notification dispatch).
+using BLPOP and dispatches them to connected WebSocket clients as
+real-time notifications.
 
 Usage:
     from services.alert_consumer import start_alert_consumer, stop_alert_consumer
@@ -35,7 +36,7 @@ def _get_alert_queue_key() -> str:
 
 
 async def _consume_alerts():
-    """Background loop that BLPOPs from alert_queue and processes alerts."""
+    """Background loop that BLPOPs from alert_queue and dispatches via WebSocket."""
     global _running
 
     try:
@@ -78,8 +79,8 @@ async def _consume_alerts():
                 logger.warning(f"Alert consumer: invalid JSON in queue: {raw_payload[:200]}")
                 continue
 
-            # Process the alert
-            _process_alert(alert)
+            # Process the alert — dispatch to WebSocket clients
+            await _process_alert(alert)
 
         except asyncio.CancelledError:
             logger.info("Alert consumer cancelled")
@@ -96,17 +97,50 @@ async def _consume_alerts():
     logger.info("Alert consumer stopped")
 
 
-def _process_alert(alert: dict):
+async def _process_alert(alert: dict):
     """
     Process a single alert from the queue.
 
-    Currently logs the alert. Extend this to dispatch notifications
-    (email, push, WebSocket, etc.) when notification channels are implemented.
+    Broadcasts the alert notification to all connected WebSocket clients
+    so the frontend can show a real-time toast/notification.
     """
-    alert_type = alert.get("type", "unknown")
     symbol = alert.get("symbol", "N/A")
     message = alert.get("message", "")
-    logger.info(f"Alert processed: type={alert_type} symbol={symbol} msg={message}")
+    priority = alert.get("priority", "medium")
+    logger.info(f"Alert dispatching: symbol={symbol} priority={priority} msg={message}")
+
+    # Broadcast to all connected WebSocket clients
+    try:
+        from services.websocket_manager import connection_manager
+        if connection_manager and connection_manager.active_connections:
+            ws_message = {
+                "type": "alert_notification",
+                "data": {
+                    "alert_id": alert.get("alert_id"),
+                    "symbol": symbol,
+                    "stock_name": alert.get("stock_name"),
+                    "condition": alert.get("type", "unknown"),
+                    "target_value": alert.get("target_value"),
+                    "current_price": alert.get("current_price"),
+                    "message": message,
+                    "priority": priority,
+                    "triggered_at": alert.get("triggered_at"),
+                },
+            }
+            # Send to all active connections
+            disconnected = []
+            for client_id, websocket in connection_manager.active_connections.items():
+                try:
+                    await websocket.send_json(ws_message)
+                except Exception:
+                    disconnected.append(client_id)
+            # Clean up dead connections
+            for cid in disconnected:
+                connection_manager.disconnect(cid)
+    except ImportError:
+        logger.debug("WebSocket manager not available for alert dispatch")
+    except Exception as e:
+        logger.debug(f"Alert WebSocket broadcast error: {e}")
 
 
 async def start_alert_consumer():
